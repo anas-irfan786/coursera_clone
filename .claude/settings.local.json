@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Read(/d:\\coursera\\frontend\\src\\components/**)"
-    ],
-    "deny": [],
-    "ask": []
-  }
-}
