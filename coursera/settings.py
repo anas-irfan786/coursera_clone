@@ -45,6 +45,18 @@ EXTERNAL_APPS = [
     'corsheaders',
     'rest_framework_simplejwt.token_blacklist',
     'accounts',
+    'courses',
+    'enrollments',
+    'assessments',
+    'certificates',
+    'payments',
+    'discussions',
+    'notifications',
+    'analytics',
+    'search',
+    'content',
+    'reviews',
+    'core',
 ]
 
 INSTALLED_APPS += EXTERNAL_APPS
