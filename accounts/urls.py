@@ -8,5 +8,6 @@ urlpatterns = [
     path('login/', views.login, name='login'),
     path('logout/', views.logout, name='logout'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-    path('user/', views.get_user, name='get_user'),
+    path('profile/', views.get_user_profile, name='user_profile'),
+    path('verify-email/<str:token>/', views.verify_email, name='verify_email'),
 ]

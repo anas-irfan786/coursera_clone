@@ -1,15 +1,20 @@
 import React, { useState } from 'react';
-import { Eye, EyeOff, Check } from 'lucide-react';
+import { Eye, EyeOff, Check, User, GraduationCap, ChevronDown } from 'lucide-react';
 import authService from '../services/authService';
 
 const CourseraAuth = () => {
   const [isLogin, setIsLogin] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [formData, setFormData] = useState({
-    fullName: '',
+    firstName: '',
+    lastName: '',
     email: '',
-    password: ''
+    password: '',
+    confirmPassword: '',
+    phoneNumber: '',
+    userType: 'student'
   });
   const [errors, setErrors] = useState({});
   const [isLoading, setIsLoading] = useState(false);
@@ -44,62 +49,127 @@ const CourseraAuth = () => {
       newErrors.password = 'Password must be at least 8 characters';
     }
     
-    if (!isLogin && !formData.fullName) {
-      newErrors.fullName = 'Full name is required';
-    }
-    
-    if (!isLogin && !agreedToTerms) {
-      newErrors.terms = 'You must agree to the terms';
+    if (!isLogin) {
+      if (!formData.firstName) {
+        newErrors.firstName = 'First name is required';
+      }
+      
+      if (!formData.lastName) {
+        newErrors.lastName = 'Last name is required';
+      }
+      
+      if (!formData.confirmPassword) {
+        newErrors.confirmPassword = 'Please confirm your password';
+      } else if (formData.password !== formData.confirmPassword) {
+        newErrors.confirmPassword = 'Passwords do not match';
+      }
+      
+      if (formData.phoneNumber && !/^\+?1?\d{9,15}$/.test(formData.phoneNumber)) {
+        newErrors.phoneNumber = 'Please enter a valid phone number';
+      }
+      
+      if (!agreedToTerms) {
+        newErrors.terms = 'You must agree to the terms';
+      }
     }
     
     return newErrors;
   };
 
   const handleSubmit = async () => {
-    const newErrors = validateForm();
-    
-    if (Object.keys(newErrors).length > 0) {
-      setErrors(newErrors);
-      return;
-    }
-    
-    setIsLoading(true);
-    
-    try {
-      let response;
-      if (isLogin) {
-        response = await authService.login(formData.email, formData.password);
-      } else {
-        response = await authService.signup(formData.fullName, formData.email, formData.password);
-      }
-      
-      console.log('Success:', response);
-      alert(`${isLogin ? 'Login' : 'Signup'} successful!`);
-      // In a real app, redirect to dashboard:
-      // window.location.href = '/dashboard';
-    } catch (error) {
-      console.error('Error:', error.response?.data);
-      setErrors({ 
-        general: error.response?.data?.error || 
-                 error.response?.data?.email?.[0] ||
-                 error.response?.data?.password?.[0] ||
-                 'An error occurred. Please try again.' 
+  const newErrors = validateForm();
+  
+  if (Object.keys(newErrors).length > 0) {
+    setErrors(newErrors);
+    return;
+  }
+  
+  setIsLoading(true);
+  
+  try {
+    let response;
+    if (isLogin) {
+      response = await authService.login(formData.email, formData.password);
+    } else {
+      // UPDATE THIS PART - Send the data as an object matching the backend
+      response = await authService.signup({
+        email: formData.email,
+        password: formData.password,
+        confirm_password: formData.confirmPassword,
+        first_name: formData.firstName,
+        last_name: formData.lastName,
+        phone_number: formData.phoneNumber,
+        user_type: formData.userType
       });
-    } finally {
-      setIsLoading(false);
     }
-  };
+    
+    console.log('Success:', response);
+    
+    // Show success message
+    if (!isLogin && response.message) {
+      alert(response.message);
+    } else {
+      alert(`Welcome ${response.user.user_type === 'instructor' ? 'Instructor' : 'Student'}!`);
+    }
+    
+    // Redirect based on user type after successful login
+    if (isLogin && response.user) {
+      if (response.user.user_type === 'instructor') {
+        window.location.href = '/instructor/dashboard';
+      } else {
+        window.location.href = '/student/dashboard';
+      }
+    } else if (!isLogin) {
+      // After successful signup, show success message and switch to login
+      setTimeout(() => {
+        setIsLogin(true);
+      }, 2000);
+    }
+  } catch (error) {
+    console.error('Error:', error.response?.data);
+    
+    // Handle different error formats
+    if (error.response?.data) {
+      const errorData = error.response.data;
+      
+      // Check for field-specific errors
+      const fieldErrors = {};
+      if (errorData.email) fieldErrors.email = errorData.email[0];
+      if (errorData.password) fieldErrors.password = errorData.password[0];
+      if (errorData.first_name) fieldErrors.firstName = errorData.first_name[0];
+      if (errorData.last_name) fieldErrors.lastName = errorData.last_name[0];
+      if (errorData.phone_number) fieldErrors.phoneNumber = errorData.phone_number[0];
+      
+      if (Object.keys(fieldErrors).length > 0) {
+        setErrors(fieldErrors);
+      } else {
+        setErrors({ 
+          general: errorData.error || errorData.detail || 'An error occurred. Please try again.' 
+        });
+      }
+    } else {
+      setErrors({ general: 'Network error. Please check your connection.' });
+    }
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   const switchMode = () => {
     setIsLogin(!isLogin);
     setErrors({});
     setFormData({
-      fullName: '',
+      firstName: '',
+      lastName: '',
       email: '',
-      password: ''
+      password: '',
+      confirmPassword: '',
+      phoneNumber: '',
+      userType: 'student'
     });
     setAgreedToTerms(false);
     setShowPassword(false);
+    setShowConfirmPassword(false);
   };
 
   const Header = () => (
@@ -151,14 +221,62 @@ const CourseraAuth = () => {
         <div className="w-full max-w-md">
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
             <div className="p-8">
-              <h1 className="text-2xl font-bold text-center text-gray-900 mb-8">
-                {isLogin ? 'Welcome back' : 'Sign up'}
+              <h1 className="text-2xl font-bold text-center text-gray-900 mb-2">
+                {isLogin ? 'Welcome back' : 'Join Coursera'}
               </h1>
+              
+              {!isLogin && (
+                <p className="text-center text-gray-600 text-sm mb-6">
+                  Start learning with unlimited access to courses
+                </p>
+              )}
               
               {/* Error message */}
               {errors.general && (
                 <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md">
                   <p className="text-sm text-red-600">{errors.general}</p>
+                </div>
+              )}
+              
+              {/* User Type Selection - Only for Signup */}
+              {!isLogin && (
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    I want to join as
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setFormData({...formData, userType: 'student'})}
+                      className={`flex flex-col items-center justify-center p-4 border-2 rounded-lg transition-all ${
+                        formData.userType === 'student' 
+                          ? 'border-blue-500 bg-blue-50' 
+                          : 'border-gray-300 hover:border-gray-400'
+                      }`}
+                    >
+                      <GraduationCap size={24} className={formData.userType === 'student' ? 'text-blue-600' : 'text-gray-600'} />
+                      <span className={`mt-2 font-medium ${formData.userType === 'student' ? 'text-blue-900' : 'text-gray-700'}`}>
+                        Student
+                      </span>
+                      <span className="text-xs text-gray-500 mt-1">Learn new skills</span>
+                    </button>
+                    
+                    <button
+                      type="button"
+                      onClick={() => setFormData({...formData, userType: 'instructor'})}
+                      className={`flex flex-col items-center justify-center p-4 border-2 rounded-lg transition-all ${
+                        formData.userType === 'instructor' 
+                          ? 'border-blue-500 bg-blue-50' 
+                          : 'border-gray-300 hover:border-gray-400'
+                      }`}
+                    >
+                      <User size={24} className={formData.userType === 'instructor' ? 'text-blue-600' : 'text-gray-600'} />
+                      <span className={`mt-2 font-medium ${formData.userType === 'instructor' ? 'text-blue-900' : 'text-gray-700'}`}>
+                        Instructor
+                      </span>
+                      <span className="text-xs text-gray-500 mt-1">Share knowledge</span>
+                    </button>
+                  </div>
                 </div>
               )}
               
@@ -185,15 +303,6 @@ const CourseraAuth = () => {
                     </svg>
                   }
                 />
-                <SocialButton 
-                  provider="Apple"
-                  onClick={() => handleSocialAuth('Apple')}
-                  icon={
-                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.53 4.09l-.05-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
-                    </svg>
-                  }
-                />
               </div>
               
               <div className="relative my-6">
@@ -208,22 +317,60 @@ const CourseraAuth = () => {
               {/* Form Fields */}
               <div className="space-y-4">
                 {!isLogin && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Full name
-                    </label>
-                    <input
-                      type="text"
-                      name="fullName"
-                      value={formData.fullName}
-                      onChange={handleInputChange}
-                      className={`w-full px-3 py-2 border ${errors.fullName ? 'border-red-500' : 'border-gray-300'} rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
-                      placeholder="Enter your full name"
-                    />
-                    {errors.fullName && (
-                      <p className="mt-1 text-xs text-red-600">{errors.fullName}</p>
-                    )}
-                  </div>
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          First name
+                        </label>
+                        <input
+                          type="text"
+                          name="firstName"
+                          value={formData.firstName}
+                          onChange={handleInputChange}
+                          className={`w-full px-3 py-2 border ${errors.firstName ? 'border-red-500' : 'border-gray-300'} rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+                          placeholder="First name"
+                        />
+                        {errors.firstName && (
+                          <p className="mt-1 text-xs text-red-600">{errors.firstName}</p>
+                        )}
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Last name
+                        </label>
+                        <input
+                          type="text"
+                          name="lastName"
+                          value={formData.lastName}
+                          onChange={handleInputChange}
+                          className={`w-full px-3 py-2 border ${errors.lastName ? 'border-red-500' : 'border-gray-300'} rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+                          placeholder="Last name"
+                        />
+                        {errors.lastName && (
+                          <p className="mt-1 text-xs text-red-600">{errors.lastName}</p>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Phone number (optional)
+                      </label>
+                      <input
+                        type="tel"
+                        name="phoneNumber"
+                        value={formData.phoneNumber}
+                        onChange={handleInputChange}
+                        className={`w-full px-3 py-2 border ${errors.phoneNumber ? 'border-red-500' : 'border-gray-300'} rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+                        placeholder="+1234567890"
+                      />
+                      {errors.phoneNumber && (
+                        <p className="mt-1 text-xs text-red-600">{errors.phoneNumber}</p>
+                      )}
+                    </div>
+                  </>
                 )}
                 
                 <div>
@@ -261,7 +408,7 @@ const CourseraAuth = () => {
                       value={formData.password}
                       onChange={handleInputChange}
                       onKeyPress={(e) => {
-                        if (e.key === 'Enter') {
+                        if (e.key === 'Enter' && isLogin) {
                           handleSubmit();
                         }
                       }}
@@ -301,6 +448,34 @@ const CourseraAuth = () => {
                 </div>
                 
                 {!isLogin && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Confirm Password
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showConfirmPassword ? "text" : "password"}
+                        name="confirmPassword"
+                        value={formData.confirmPassword}
+                        onChange={handleInputChange}
+                        className={`w-full px-3 py-2 border ${errors.confirmPassword ? 'border-red-500' : 'border-gray-300'} rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent pr-10`}
+                        placeholder="Confirm your password"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      >
+                        {showConfirmPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                      </button>
+                    </div>
+                    {errors.confirmPassword && (
+                      <p className="mt-1 text-xs text-red-600">{errors.confirmPassword}</p>
+                    )}
+                  </div>
+                )}
+                
+                {!isLogin && (
                   <div className="flex items-start">
                     <input
                       type="checkbox"
@@ -313,8 +488,11 @@ const CourseraAuth = () => {
                       I accept Coursera's{' '}
                       <a href="#" className="text-blue-600 hover:underline">Terms of Use</a> and{' '}
                       <a href="#" className="text-blue-600 hover:underline">Privacy Notice</a>. 
-                      Having trouble logging in?{' '}
-                      <a href="#" className="text-blue-600 hover:underline">Learner help center</a>
+                      {formData.userType === 'instructor' && (
+                        <span> I also agree to the{' '}
+                          <a href="#" className="text-blue-600 hover:underline">Instructor Terms</a>.
+                        </span>
+                      )}
                     </label>
                   </div>
                 )}
@@ -327,7 +505,7 @@ const CourseraAuth = () => {
                   disabled={isLoading}
                   className={`w-full ${isLoading ? 'bg-blue-400' : 'bg-blue-600 hover:bg-blue-700'} text-white py-3 px-4 rounded-md transition duration-200 font-medium`}
                 >
-                  {isLoading ? 'Processing...' : (isLogin ? 'Log in' : 'Sign up')}
+                  {isLoading ? 'Processing...' : (isLogin ? 'Log in' : `Sign up as ${formData.userType}`)}
                 </button>
               </div>
               
@@ -348,6 +526,37 @@ const CourseraAuth = () => {
                   <a href="#" className="text-sm text-blue-600 hover:underline">
                     Log in with your organization
                   </a>
+                </div>
+              )}
+              
+              {/* Development Test Credentials */}
+              {isLogin && process.env.NODE_ENV === 'development' && (
+                <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+                  <p className="text-xs font-medium text-yellow-800 mb-2">🔧 Development Test Credentials:</p>
+                  <div className="space-y-2 text-xs">
+                    <div>
+                      <strong>Test Instructor:</strong>
+                      <div>Email: instructor@test.com</div>
+                      <div>Password: testpass123</div>
+                    </div>
+                    <div>
+                      <strong>Test Student:</strong>
+                      <div>Email: student@test.com</div>
+                      <div>Password: testpass123</div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setFormData({
+                        ...formData,
+                        email: 'instructor@test.com',
+                        password: 'testpass123'
+                      });
+                    }}
+                    className="mt-2 text-xs bg-yellow-200 hover:bg-yellow-300 px-2 py-1 rounded"
+                  >
+                    Use Instructor Test Account
+                  </button>
                 </div>
               )}
             </div>
