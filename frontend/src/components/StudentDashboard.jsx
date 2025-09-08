@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
 import { BookOpen, Clock, Award, TrendingUp, Calendar, Play, CheckCircle, Star, Filter, Search, Bell, User, Settings, LogOut, Home, BookMarked, Trophy, Download, ArrowRight, PlayCircle, Users, Timer, Target, Zap, ChevronRight, Heart, Share2, MoreVertical, Menu, X } from 'lucide-react';
+import authService from '../services/authService';
 
 // Mock API service
 const api = {
@@ -176,12 +177,44 @@ const api = {
 const StudentDashboard = () => {
   const [activeTab, setActiveTab] = useState('home');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [user] = useState({
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [user, setUser] = useState({
     name: 'John Student',
     email: 'student@example.com',
     avatar: 'https://ui-avatars.com/api/?name=John+Student&background=4F46E5&color=fff',
     subscription: 'coursera_plus' // or 'free'
   });
+
+  // Get actual user data
+  useEffect(() => {
+    const currentUser = authService.getCurrentUser();
+    if (currentUser) {
+      setUser({
+        name: `${currentUser.first_name} ${currentUser.last_name}`,
+        email: currentUser.email,
+        avatar: `https://ui-avatars.com/api/?name=${currentUser.first_name}+${currentUser.last_name}&background=4F46E5&color=fff`,
+        subscription: 'coursera_plus' // This should come from actual subscription data
+      });
+    }
+  }, []);
+
+  // Logout functionality
+  const handleLogout = async () => {
+    // Show confirmation dialog
+    if (window.confirm('Are you sure you want to logout?')) {
+      setIsLoggingOut(true);
+      try {
+        await authService.logout();
+        // Redirect to login page
+        window.location.href = '/login';
+      } catch (error) {
+        console.error('Error during logout:', error);
+        // Even if logout API fails, clear local storage and redirect
+        localStorage.clear();
+        window.location.href = '/login';
+      }
+    }
+  };
 
   const navItems = [
     { id: 'home', label: 'Home', icon: Home },
@@ -216,9 +249,15 @@ const StudentDashboard = () => {
           <div className="flex justify-between items-center h-16">
             {/* Logo and Desktop Nav */}
             <div className="flex items-center">
-              <h1 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent mr-8">
-                Coursera Clone
-              </h1>
+              <div className="flex items-center mr-8">
+                <svg className="h-8 w-8 text-blue-600 mr-2" viewBox="0 0 32 32" fill="currentColor">
+                  <rect x="0" y="0" width="14" height="14" rx="2" />
+                  <rect x="18" y="0" width="14" height="14" rx="2" />
+                  <rect x="0" y="18" width="14" height="14" rx="2" />
+                  <rect x="18" y="18" width="14" height="14" rx="2" />
+                </svg>
+                <span className="text-2xl font-semibold text-gray-900">coursera</span>
+              </div>
               
               {/* Desktop Navigation */}
               <nav className="hidden md:flex space-x-1">
@@ -279,10 +318,22 @@ const StudentDashboard = () => {
                     Settings
                   </a>
                   <hr className="my-1" />
-                  <a href="#" className="block px-4 py-2 text-sm text-red-600 hover:bg-red-50">
-                    <LogOut size={16} className="inline mr-2" />
-                    Logout
-                  </a>
+                  <button
+                    onClick={handleLogout}
+                    disabled={isLoggingOut}
+                    className={`w-full text-left px-4 py-2 text-sm flex items-center ${
+                      isLoggingOut 
+                        ? 'text-gray-400 bg-gray-100 cursor-not-allowed' 
+                        : 'text-red-600 hover:bg-red-50'
+                    }`}
+                  >
+                    {isLoggingOut ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400 inline mr-2"></div>
+                    ) : (
+                      <LogOut size={16} className="inline mr-2" />
+                    )}
+                    {isLoggingOut ? 'Logging out...' : 'Logout'}
+                  </button>
                 </div>
               </div>
               
