@@ -21,6 +21,19 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// Helper function for logout cleanup
+const logoutAndRedirect = () => {
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('refresh_token');
+  localStorage.removeItem('user');
+  localStorage.removeItem('profile');
+  
+  // Only redirect if not already on login page to prevent infinite redirects
+  if (!window.location.pathname.includes('/login')) {
+    window.location.href = '/login';
+  }
+};
+
 // Handle token refresh
 api.interceptors.response.use(
   (response) => response,
@@ -30,19 +43,35 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
       
+      // Prevent infinite loops if already on login page
+      if (window.location.pathname.includes('/login')) {
+        return Promise.reject(error);
+      }
+      
       try {
         const refreshToken = localStorage.getItem('refresh_token');
+        
+        // If no refresh token, logout immediately
+        if (!refreshToken) {
+          console.log('API service: No refresh token available, logging out');
+          logoutAndRedirect();
+          return Promise.reject(error);
+        }
+        
+        console.log('API service attempting token refresh...');
         const response = await axios.post(`${API_BASE_URL}/auth/token/refresh/`, {
           refresh: refreshToken
         });
         
+        console.log('API service token refresh successful');
         localStorage.setItem('access_token', response.data.access);
         originalRequest.headers.Authorization = `Bearer ${response.data.access}`;
         
         return api(originalRequest);
       } catch (refreshError) {
-        // Redirect to login
-        window.location.href = '/login';
+        console.error('API service token refresh failed:', refreshError);
+        // Clear storage and redirect to login
+        logoutAndRedirect();
         return Promise.reject(refreshError);
       }
     }

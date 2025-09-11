@@ -44,6 +44,7 @@ EXTERNAL_APPS = [
     'rest_framework_simplejwt',
     'corsheaders',
     'rest_framework_simplejwt.token_blacklist',
+    'channels',  # Add channels for WebSocket support
     'accounts',
     'courses',
     'enrollments',
@@ -95,6 +96,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'coursera.wsgi.application'
+ASGI_APPLICATION = 'coursera.asgi.application'
 
 
 # Database
@@ -177,6 +179,40 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
+}
+
+# Channels Configuration
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+        'CONFIG': {
+            'capacity': 1500,  # Maximum number of messages to store
+            'expiry': 60,      # Messages expire after 60 seconds
+        },
+    },
+}
+
+# Logging configuration for debugging WebSocket issues
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'loggers': {
+        'discussions.consumers': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'discussions.middleware': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
 }
 
 AUTH_USER_MODEL = 'accounts.User'
