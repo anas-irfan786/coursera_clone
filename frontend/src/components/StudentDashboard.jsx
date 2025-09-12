@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { BookOpen, Clock, Award, CheckCircle, Star, Filter, Search, Bell, User, Settings, LogOut, Home, Users, Timer, Target, Zap, ChevronRight, Heart, Share2, MoreVertical, Menu, X, Plus, MessageSquare, Trophy } from "lucide-react";
 import authService from "../services/authService";
 
@@ -23,6 +23,7 @@ const StudentDashboard = () => {
     avatar: "https://ui-avatars.com/api/?name=John+Student&background=4F46E5&color=fff",
     subscription: "coursera_plus", // or 'free'
   });
+  const mobileMenuRef = useRef(null);
 
   // Save active tab to localStorage whenever it changes
   useEffect(() => {
@@ -40,6 +41,29 @@ const StudentDashboard = () => {
         subscription: "coursera_plus", // This should come from actual subscription data
       });
     }
+  }, []);
+
+  // Close mobile menu when clicking outside or when resizing to larger screen
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target)) {
+        setMobileMenuOpen(false);
+      }
+    }
+
+    function handleResize() {
+      if (window.innerWidth >= 1024) { // lg breakpoint
+        setMobileMenuOpen(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('resize', handleResize);
+    
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('resize', handleResize);
+    };
   }, []);
 
   // Logout functionality
@@ -91,7 +115,7 @@ const StudentDashboard = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top Navigation */}
-      <header className="bg-white shadow-sm border-b sticky top-0 z-50">
+      <header ref={mobileMenuRef} className="bg-white shadow-sm border-b sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             {/* Logo and Desktop Nav */}
@@ -113,21 +137,21 @@ const StudentDashboard = () => {
               </div>
 
               {/* Desktop Navigation */}
-              <nav className="hidden md:flex space-x-1">
+              <nav className="hidden lg:flex space-x-1">
                 {navItems.map((item) => {
                   const Icon = item.icon;
                   return (
                     <button
                       key={item.id}
                       onClick={() => setActiveTab(item.id)}
-                      className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center space-x-2 ${
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center space-x-2 ${
                         activeTab === item.id
                           ? "bg-gradient-to-r from-indigo-50 to-purple-50 text-indigo-600"
                           : "text-gray-700 hover:bg-gray-50"
                       }`}
                     >
-                      <Icon size={18} />
-                      <span>{item.label}</span>
+                      <Icon size={16} />
+                      <span className="whitespace-nowrap">{item.label}</span>
                     </button>
                   );
                 })}
@@ -205,7 +229,7 @@ const StudentDashboard = () => {
               {/* Mobile menu button */}
               <button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                className="md:hidden p-2 text-gray-600 hover:text-gray-900"
+                className="lg:hidden p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
               >
                 {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
               </button>
@@ -215,8 +239,8 @@ const StudentDashboard = () => {
 
         {/* Mobile Navigation */}
         {mobileMenuOpen && (
-          <nav className="md:hidden border-t bg-white">
-            <div className="px-4 py-2 space-y-1">
+          <nav className="lg:hidden border-t bg-white shadow-lg">
+            <div className="px-4 py-3 space-y-1 max-h-80 overflow-y-auto">
               {navItems.map((item) => {
                 const Icon = item.icon;
                 return (
@@ -226,13 +250,13 @@ const StudentDashboard = () => {
                       setActiveTab(item.id);
                       setMobileMenuOpen(false);
                     }}
-                    className={`w-full px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center space-x-2 ${
+                    className={`w-full px-4 py-3 rounded-lg text-sm font-medium transition-all duration-200 flex items-center space-x-3 ${
                       activeTab === item.id
-                        ? "bg-gradient-to-r from-indigo-50 to-purple-50 text-indigo-600"
+                        ? "bg-gradient-to-r from-indigo-50 to-purple-50 text-indigo-600 border border-indigo-200"
                         : "text-gray-700 hover:bg-gray-50"
                     }`}
                   >
-                    <Icon size={18} />
+                    <Icon size={20} />
                     <span>{item.label}</span>
                   </button>
                 );
