@@ -44,6 +44,7 @@ EXTERNAL_APPS = [
     'rest_framework_simplejwt',
     'corsheaders',
     'rest_framework_simplejwt.token_blacklist',
+    'channels',  # Add channels for WebSocket support
     'accounts',
     'courses',
     'enrollments',
@@ -62,6 +63,7 @@ EXTERNAL_APPS = [
 INSTALLED_APPS += EXTERNAL_APPS
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -70,12 +72,6 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
-
-EXTERNAL_MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',
-]
-
-MIDDLEWARE += EXTERNAL_MIDDLEWARE
 
 ROOT_URLCONF = 'coursera.urls'
 
@@ -95,6 +91,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'coursera.wsgi.application'
+ASGI_APPLICATION = 'coursera.asgi.application'
 
 
 # Database
@@ -179,4 +176,42 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
+# Channels Configuration
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+        'CONFIG': {
+            'capacity': 1500,  # Maximum number of messages to store
+            'expiry': 60,      # Messages expire after 60 seconds
+        },
+    },
+}
+
+# Logging configuration for debugging WebSocket issues
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'loggers': {
+        'discussions.consumers': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'discussions.middleware': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
+
 AUTH_USER_MODEL = 'accounts.User'
+
+# Media files (uploads)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'

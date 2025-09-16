@@ -309,6 +309,62 @@ class InstructorCourseViewSet(viewsets.ModelViewSet):
             'total_reviews': course.total_reviews,
             'recent_reviews': reviews_data
         })
+    
+    @action(detail=True, methods=['post'], url_path='delete-course')
+    def delete_course(self, request, pk=None):
+        """Delete a course with confirmation"""
+        try:
+            course = self.get_object()
+            
+            # Debug logging
+            print(f"Delete course request received for course: {course.title}")
+            print(f"Request data: {request.data}")
+            
+            # Get confirmation string from request
+            confirmation = request.data.get('confirmation', '')
+            expected_confirmation = f"{request.user.email}/{course.title}"
+            
+            print(f"Expected confirmation: {expected_confirmation}")
+            print(f"Received confirmation: {confirmation}")
+            
+            if confirmation != expected_confirmation:
+                return Response({
+                    'error': f'Confirmation failed. Please type "{expected_confirmation}" to confirm deletion.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            print(f"Error in delete_course: {str(e)}")
+            return Response({
+                'error': f'An error occurred: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        # Check if course has enrollments
+        enrollment_count = Enrollment.objects.filter(course=course).count()
+        if enrollment_count > 0:
+            return Response({
+                'error': f'Cannot delete course with {enrollment_count} enrolled students. Please contact support for assistance.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Store course title for response
+        course_title = course.title
+        
+        # Delete the course (this will cascade delete related objects)
+        course.delete()
+        
+        print(f"Course {course_title} successfully deleted")
+        
+        return Response({
+            'message': f'Course "{course_title}" has been permanently deleted.'
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['get'])
+    def test_endpoint(self, request, pk=None):
+        """Test endpoint to verify API is accessible"""
+        course = self.get_object()
+        return Response({
+            'message': f'Test endpoint working for course: {course.title}',
+            'course_id': str(course.uuid),
+            'user': request.user.email
+        })
 
 # Section and Lecture ViewSets
 class SectionViewSet(viewsets.ModelViewSet):

@@ -5,7 +5,7 @@ import CourseraAuth from './components/CourseraAuth';
 import InstructorDashboard from './components/InstructorDashboard'; // ← Correct path
 import authService from './services/authService';
 import StudentDashboard from './components/StudentDashboard';
-
+import AdminDashboard from './components/AdminDashboard';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -44,6 +44,15 @@ function App() {
             isAuthenticated ? 
               <Navigate to = {userType === 'instructor' ? '/instructor/dashboard' : '/student/dashboard'} /> : 
               <CourseraAuth />
+          } 
+        />
+
+        <Route 
+          path="/admindashboard" 
+          element={
+            // isAuthenticated && userType === 'admin' ? 
+              <AdminDashboard /> // : 
+              // <Navigate to="/login" />
           } 
         />
         
