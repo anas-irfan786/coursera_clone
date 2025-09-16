@@ -58,6 +58,9 @@ class InstructorCourseViewSet(viewsets.ModelViewSet):
         course.status = 'unpublished'
         course.save()
         return Response({'status': 'Course unpublished successfully'})
+
+    
+
     
     @action(detail=True, methods=['get'])
     def students(self, request, pk=None):

@@ -3,6 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
 from . import student_views
+
 router = DefaultRouter()
 router.register('instructor/courses', views.InstructorCourseViewSet, basename='instructor-courses')
 

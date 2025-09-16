@@ -4,28 +4,163 @@ import api from '../../services/api';
 
 // Create Course Modal
 export const CreateCourseModal = ({ onClose, onSave }) => {
+  // Language mapping - we'll use IDs that should exist or can be created
+  const languageMap = {
+    'en': 1, 'es': 2, 'zh': 3, 'hi': 4, 'ar': 5,
+    'pt': 6, 'ru': 7, 'ja': 8, 'fr': 9, 'de': 10,
+    'ko': 11, 'it': 12, 'tr': 13, 'pl': 14, 'nl': 15,
+    'sv': 16, 'da': 17, 'no': 18, 'fi': 19, 'he': 20,
+    'th': 21, 'vi': 22, 'id': 23, 'ms': 24, 'tl': 25,
+    'uk': 26, 'cs': 27, 'hu': 28, 'ro': 29, 'el': 30
+  };
+
   const [courseData, setCourseData] = useState({
     title: '',
     subtitle: '',
     description: '',
     category: '',
     level: 'beginner',
-    language: 'en',
+    language: 'en', // English language code
     course_type: 'coursera_plus', // FREE or COURSERA_PLUS
     estimated_hours: 10,
   });
+
+  const [thumbnailFile, setThumbnailFile] = useState(null);
+  const [thumbnailPreview, setThumbnailPreview] = useState(null);
+  const [thumbnailError, setThumbnailError] = useState('');
+
+  // File validation function
+  const validateThumbnailFile = (file) => {
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    const maxSize = 5 * 1024 * 1024; // 5MB
+
+    if (!allowedTypes.includes(file.type)) {
+      return 'Please select a valid image file (JPEG, JPG, PNG, or WebP)';
+    }
+
+    if (file.size > maxSize) {
+      return 'File size must be less than 5MB';
+    }
+
+    return null;
+  };
+
+  const handleThumbnailChange = (e) => {
+    const file = e.target.files[0];
+    setThumbnailError('');
+
+    if (!file) {
+      setThumbnailFile(null);
+      setThumbnailPreview(null);
+      return;
+    }
+
+    const error = validateThumbnailFile(file);
+    if (error) {
+      setThumbnailError(error);
+      setThumbnailFile(null);
+      setThumbnailPreview(null);
+      e.target.value = ''; // Clear the input
+      return;
+    }
+
+    setThumbnailFile(file);
+    
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setThumbnailPreview(e.target.result);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleSubmit = async () => {
     if (!courseData.title || !courseData.description) {
       alert('Please fill in required fields');
       return;
     }
+
+    if (!thumbnailFile) {
+      alert('Please upload a course thumbnail');
+      return;
+    }
     
     try {
-      await api.post('/courses/instructor/courses/', courseData);
-      onSave();
+      // Generate slug from title
+      const slug = courseData.title
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, '') // Remove special characters
+        .replace(/\s+/g, '-') // Replace spaces with hyphens
+        .replace(/-+/g, '-') // Replace multiple hyphens with single hyphen
+        .trim('-'); // Remove leading/trailing hyphens
+      
+      // Create FormData to handle file upload
+      const formData = new FormData();
+      formData.append('title', courseData.title);
+      formData.append('subtitle', courseData.subtitle || '');
+      formData.append('description', courseData.description);
+      // Don't append category if empty - let backend handle null
+      formData.append('level', courseData.level);
+      // Skip language for now - it's nullable in the model
+      // formData.append('language', languageMap[courseData.language] || 1);
+      formData.append('course_type', courseData.course_type);
+      formData.append('estimated_hours', courseData.estimated_hours);
+      formData.append('slug', slug);
+      formData.append('status', 'draft');
+      
+      // Add the uploaded thumbnail file
+      formData.append('thumbnail', thumbnailFile);
+        
+      console.log('Creating course with FormData');
+      const response = await api.post('/courses/instructor/courses/', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      console.log('Course created successfully:', response.data);
+      
+      // Show success message
+      alert('Course created successfully! You can now edit it and add content.');
+      
+      onSave(); // This will refresh the courses list and close the modal
     } catch (error) {
       console.error('Error creating course:', error);
+      console.error('Error response:', error.response?.data);
+      console.error('Error status:', error.response?.status);
+      
+      // Show more specific error message
+      let errorMessage = 'Unknown error occurred';
+
+      if (error.response?.data) {
+        if (typeof error.response.data === 'string') {
+          errorMessage = error.response.data;
+        } else if (error.response.data.detail) {
+          errorMessage = error.response.data.detail;
+        } else if (error.response.data.message) {
+          errorMessage = error.response.data.message;
+        } else if (error.response.data.non_field_errors) {
+          errorMessage = error.response.data.non_field_errors.join(', ');
+        } else {
+          // Handle field validation errors
+          const fieldErrors = [];
+          for (const [field, errors] of Object.entries(error.response.data)) {
+            if (Array.isArray(errors)) {
+              fieldErrors.push(`${field}: ${errors.join(', ')}`);
+            } else {
+              fieldErrors.push(`${field}: ${errors}`);
+            }
+          }
+          if (fieldErrors.length > 0) {
+            errorMessage = fieldErrors.join('\n');
+          } else {
+            errorMessage = JSON.stringify(error.response.data);
+          }
+        }
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+
+      alert(`Error creating course: ${errorMessage}`);
     }
   };
 
@@ -78,6 +213,62 @@ export const CreateCourseModal = ({ onClose, onSave }) => {
               placeholder="What will students learn in this course?"
             />
           </div>
+
+          {/* Course Thumbnail Upload */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Course Thumbnail *
+            </label>
+            <div className="space-y-4">
+              <div className="flex items-center justify-center w-full">
+                <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
+                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                    <svg className="w-8 h-8 mb-4 text-gray-500" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 16">
+                      <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2"/>
+                    </svg>
+                    <p className="mb-2 text-sm text-gray-500">
+                      <span className="font-semibold">Click to upload</span> course thumbnail
+                    </p>
+                    <p className="text-xs text-gray-500">JPEG, JPG, PNG or WebP (Max 5MB)</p>
+                  </div>
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept="image/jpeg,image/jpg,image/png,image/webp"
+                    onChange={handleThumbnailChange}
+                  />
+                </label>
+              </div>
+              
+              {thumbnailError && (
+                <p className="text-sm text-red-600">{thumbnailError}</p>
+              )}
+              
+              {thumbnailPreview && (
+                <div className="mt-4">
+                  <p className="text-sm font-medium text-gray-700 mb-2">Preview:</p>
+                  <div className="relative inline-block">
+                    <img
+                      src={thumbnailPreview}
+                      alt="Thumbnail preview"
+                      className="h-24 w-auto rounded-lg border border-gray-200"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setThumbnailFile(null);
+                        setThumbnailPreview(null);
+                        setThumbnailError('');
+                      }}
+                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
           
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -92,7 +283,6 @@ export const CreateCourseModal = ({ onClose, onSave }) => {
                 <option value="beginner">Beginner</option>
                 <option value="intermediate">Intermediate</option>
                 <option value="advanced">Advanced</option>
-                <option value="all_levels">All Levels</option>
               </select>
             </div>
             
@@ -107,8 +297,34 @@ export const CreateCourseModal = ({ onClose, onSave }) => {
               >
                 <option value="en">English</option>
                 <option value="es">Spanish</option>
+                <option value="zh">Chinese (Mandarin)</option>
+                <option value="hi">Hindi</option>
+                <option value="ar">Arabic</option>
+                <option value="pt">Portuguese</option>
+                <option value="ru">Russian</option>
+                <option value="ja">Japanese</option>
                 <option value="fr">French</option>
                 <option value="de">German</option>
+                <option value="ko">Korean</option>
+                <option value="it">Italian</option>
+                <option value="tr">Turkish</option>
+                <option value="pl">Polish</option>
+                <option value="nl">Dutch</option>
+                <option value="sv">Swedish</option>
+                <option value="da">Danish</option>
+                <option value="no">Norwegian</option>
+                <option value="fi">Finnish</option>
+                <option value="he">Hebrew</option>
+                <option value="th">Thai</option>
+                <option value="vi">Vietnamese</option>
+                <option value="id">Indonesian</option>
+                <option value="ms">Malay</option>
+                <option value="tl">Filipino</option>
+                <option value="uk">Ukrainian</option>
+                <option value="cs">Czech</option>
+                <option value="hu">Hungarian</option>
+                <option value="ro">Romanian</option>
+                <option value="el">Greek</option>
               </select>
             </div>
           </div>
@@ -169,7 +385,83 @@ export const CreateCourseModal = ({ onClose, onSave }) => {
 // Edit Course Modal
 export const EditCourseModal = ({ course, onClose, onSave }) => {
   const [activeTab, setActiveTab] = useState('basic');
-  
+  const [loading, setLoading] = useState(false);
+  const [courseData, setCourseData] = useState({
+    title: course.title || '',
+    subtitle: course.subtitle || '',
+    description: course.description || '',
+    level: course.level || 'beginner',
+    course_type: course.course_type || 'coursera_plus',
+    estimated_hours: course.estimated_hours || 10,
+  });
+
+  const handleSave = async () => {
+    if (!courseData.title || !courseData.description) {
+      alert('Please fill in required fields (Title and Description)');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('title', courseData.title);
+      formData.append('subtitle', courseData.subtitle || '');
+      formData.append('description', courseData.description);
+      formData.append('level', courseData.level);
+      formData.append('course_type', courseData.course_type);
+      formData.append('estimated_hours', courseData.estimated_hours);
+
+      const response = await api.put(`/courses/instructor/courses/${course.id}/`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
+      console.log('Course updated successfully:', response.data);
+      alert('Course updated successfully!');
+      onSave(); // This will refresh the courses list and close the modal
+    } catch (error) {
+      console.error('Error updating course:', error);
+      console.error('Error response:', error.response?.data);
+
+      // Show more specific error message
+      let errorMessage = 'Unknown error occurred';
+
+      if (error.response?.data) {
+        if (typeof error.response.data === 'string') {
+          errorMessage = error.response.data;
+        } else if (error.response.data.detail) {
+          errorMessage = error.response.data.detail;
+        } else if (error.response.data.message) {
+          errorMessage = error.response.data.message;
+        } else if (error.response.data.non_field_errors) {
+          errorMessage = error.response.data.non_field_errors.join(', ');
+        } else {
+          // Handle field validation errors
+          const fieldErrors = [];
+          for (const [field, errors] of Object.entries(error.response.data)) {
+            if (Array.isArray(errors)) {
+              fieldErrors.push(`${field}: ${errors.join(', ')}`);
+            } else {
+              fieldErrors.push(`${field}: ${errors}`);
+            }
+          }
+          if (fieldErrors.length > 0) {
+            errorMessage = fieldErrors.join('\n');
+          } else {
+            errorMessage = JSON.stringify(error.response.data);
+          }
+        }
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+
+      alert(`Error updating course: ${errorMessage}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
@@ -203,23 +495,68 @@ export const EditCourseModal = ({ course, onClose, onSave }) => {
             <div className="space-y-6">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Course Title
+                  Course Title *
                 </label>
                 <input
                   type="text"
-                  defaultValue={course.title}
+                  value={courseData.title}
+                  onChange={(e) => setCourseData({...courseData, title: e.target.value})}
                   className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="Enter course title"
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Description
+                  Subtitle
+                </label>
+                <input
+                  type="text"
+                  value={courseData.subtitle}
+                  onChange={(e) => setCourseData({...courseData, subtitle: e.target.value})}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="Brief description of your course"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Description *
                 </label>
                 <textarea
                   rows="4"
-                  defaultValue={course.description || ''}
+                  value={courseData.description}
+                  onChange={(e) => setCourseData({...courseData, description: e.target.value})}
                   className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="What will students learn in this course?"
                 />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Level
+                  </label>
+                  <select
+                    value={courseData.level}
+                    onChange={(e) => setCourseData({...courseData, level: e.target.value})}
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="beginner">Beginner</option>
+                    <option value="intermediate">Intermediate</option>
+                    <option value="advanced">Advanced</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Estimated Hours
+                  </label>
+                  <input
+                    type="number"
+                    value={courseData.estimated_hours}
+                    onChange={(e) => setCourseData({...courseData, estimated_hours: parseFloat(e.target.value) || 0})}
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    min="1"
+                    step="0.5"
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -256,15 +593,16 @@ export const EditCourseModal = ({ course, onClose, onSave }) => {
                   Course Type
                 </label>
                 <select
-                  defaultValue={course.course_type || 'coursera_plus'}
+                  value={courseData.course_type}
+                  onChange={(e) => setCourseData({...courseData, course_type: e.target.value})}
                   className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="coursera_plus">Coursera Plus (Subscription-based)</option>
                   <option value="free">Free Course</option>
                 </select>
                 <p className="text-sm text-gray-500 mt-2">
-                  {course.course_type === 'free' 
-                    ? 'Free courses are available to all users but don\'t generate instructor earnings.' 
+                  {courseData.course_type === 'free'
+                    ? 'Free courses are available to all users but don\'t generate instructor earnings.'
                     : 'Coursera Plus courses generate earnings based on student engagement and completion rates.'
                   }
                 </p>
@@ -302,10 +640,11 @@ export const EditCourseModal = ({ course, onClose, onSave }) => {
               Cancel
             </button>
             <button
-              onClick={onSave}
-              className="flex-1 px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg hover:from-indigo-700 hover:to-purple-700"
+              onClick={handleSave}
+              disabled={loading}
+              className="flex-1 px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50"
             >
-              Save Changes
+              {loading ? 'Saving...' : 'Save Changes'}
             </button>
           </div>
         </div>

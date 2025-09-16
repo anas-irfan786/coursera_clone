@@ -63,6 +63,7 @@ EXTERNAL_APPS = [
 INSTALLED_APPS += EXTERNAL_APPS
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -71,12 +72,6 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
-
-EXTERNAL_MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',
-]
-
-MIDDLEWARE += EXTERNAL_MIDDLEWARE
 
 ROOT_URLCONF = 'coursera.urls'
 
@@ -216,3 +211,7 @@ LOGGING = {
 }
 
 AUTH_USER_MODEL = 'accounts.User'
+
+# Media files (uploads)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'

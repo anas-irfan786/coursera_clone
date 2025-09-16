@@ -2,8 +2,35 @@
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.exceptions import ValidationError
 from core.models import BaseModel, Category, Tag, Language
 import uuid
+import os
+
+def validate_course_thumbnail(value):
+    """Validate that the uploaded file is a valid image"""
+    if not value:
+        return
+    
+    # Check file extension
+    ext = os.path.splitext(value.name)[1].lower()
+    valid_extensions = ['.jpg', '.jpeg', '.png', '.webp']
+    if ext not in valid_extensions:
+        raise ValidationError(
+            f'Invalid file extension {ext}. Allowed extensions are: {", ".join(valid_extensions)}'
+        )
+    
+    # Check file size (5MB max)
+    if value.size > 5 * 1024 * 1024:
+        raise ValidationError('File size cannot exceed 5MB.')
+    
+    # Check if it's actually an image by trying to read it
+    try:
+        from PIL import Image
+        image = Image.open(value)
+        image.verify()
+    except Exception:
+        raise ValidationError('Invalid image file. Please upload a valid image.')
 
 class Course(BaseModel):
     LEVEL_CHOICES = (
@@ -55,7 +82,11 @@ class Course(BaseModel):
     duration_hours = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     
     # Media
-    thumbnail = models.ImageField(upload_to='course_thumbnails/')
+    thumbnail = models.ImageField(
+        upload_to='course_thumbnails/', 
+        validators=[validate_course_thumbnail],
+        help_text="Course thumbnail image (JPEG, JPG, PNG, WebP - Max 5MB)"
+    )
     preview_video = models.FileField(upload_to='course_previews/', blank=True, null=True)
     
     
