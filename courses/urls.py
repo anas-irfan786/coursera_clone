@@ -17,7 +17,7 @@ urlpatterns = [
     path('instructor/courses/<uuid:course_uuid>/sections/', 
          views.SectionViewSet.as_view({'get': 'list', 'post': 'create'}),
          name='course-sections'),
-    path('instructor/sections/<uuid:pk>/',
+    path('instructor/sections/<uuid:uuid>/',
          views.SectionViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'}),
          name='section-detail'),
     
@@ -25,7 +25,7 @@ urlpatterns = [
     path('instructor/sections/<uuid:section_uuid>/lectures/',
          views.LectureViewSet.as_view({'get': 'list', 'post': 'create'}),
          name='section-lectures'),
-    path('instructor/lectures/<uuid:pk>/',
+    path('instructor/lectures/<uuid:uuid>/',
          views.LectureViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'}),
          name='lecture-detail'),
     

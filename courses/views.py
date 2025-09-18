@@ -370,13 +370,19 @@ class InstructorCourseViewSet(viewsets.ModelViewSet):
 class SectionViewSet(viewsets.ModelViewSet):
     serializer_class = SectionSerializer
     permission_classes = [IsInstructor]
-    
+    lookup_field = 'uuid'
+
     def get_queryset(self):
         course_uuid = self.kwargs.get('course_uuid')
-        return Section.objects.filter(
-            course__uuid=course_uuid,
-            course__instructor=self.request.user
-        )
+        if course_uuid:
+            return Section.objects.filter(
+                course__uuid=course_uuid,
+                course__instructor=self.request.user
+            )
+        else:
+            return Section.objects.filter(
+                course__instructor=self.request.user
+            )
     
     def perform_create(self, serializer):
         course_uuid = self.kwargs.get('course_uuid')
@@ -386,13 +392,19 @@ class SectionViewSet(viewsets.ModelViewSet):
 class LectureViewSet(viewsets.ModelViewSet):
     serializer_class = LectureSerializer
     permission_classes = [IsInstructor]
+    lookup_field = 'uuid'
     
     def get_queryset(self):
         section_uuid = self.kwargs.get('section_uuid')
-        return Lecture.objects.filter(
-            section__uuid=section_uuid,
-            section__course__instructor=self.request.user
-        )
+        if section_uuid:
+            return Lecture.objects.filter(
+                section__uuid=section_uuid,
+                section__course__instructor=self.request.user
+            )
+        else:
+            return Lecture.objects.filter(
+                section__course__instructor=self.request.user
+            )
     
     def perform_create(self, serializer):
         section_uuid = self.kwargs.get('section_uuid')

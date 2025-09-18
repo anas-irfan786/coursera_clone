@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import api from '../../services/api';
+import CurriculumTab from './CurriculumTab';
 
 // Create Course Modal
 export const CreateCourseModal = ({ onClose, onSave }) => {
@@ -386,14 +387,104 @@ export const CreateCourseModal = ({ onClose, onSave }) => {
 export const EditCourseModal = ({ course, onClose, onSave }) => {
   const [activeTab, setActiveTab] = useState('basic');
   const [loading, setLoading] = useState(false);
+  const [fetchingDetails, setFetchingDetails] = useState(false);
+
+
   const [courseData, setCourseData] = useState({
-    title: course.title || '',
-    subtitle: course.subtitle || '',
-    description: course.description || '',
-    level: course.level || 'beginner',
-    course_type: course.course_type || 'coursera_plus',
-    estimated_hours: course.estimated_hours || 10,
+    title: course?.title || '',
+    subtitle: '',
+    description: '',
+    level: 'beginner',
+    course_type: course?.course_type || 'coursera_plus',
+    estimated_hours: 10,
   });
+
+  // Fetch complete course details when modal opens
+  useEffect(() => {
+    const fetchCourseDetails = async () => {
+      if (!course?.id) return;
+
+      setFetchingDetails(true);
+      try {
+        const response = await api.get(`/courses/instructor/courses/${course.id}/`);
+        const fullCourseData = response.data;
+
+        setCourseData({
+          title: fullCourseData.title || '',
+          subtitle: fullCourseData.subtitle || '',
+          description: fullCourseData.description || '',
+          level: fullCourseData.level || 'beginner',
+          course_type: fullCourseData.course_type || 'coursera_plus',
+          estimated_hours: fullCourseData.estimated_hours || 10,
+        });
+
+      } catch (error) {
+        console.error('Error fetching course details:', error);
+        // Fallback to whatever data we have
+        setCourseData({
+          title: course.title || '',
+          subtitle: '',
+          description: '',
+          level: 'beginner',
+          course_type: course.course_type || 'coursera_plus',
+          estimated_hours: 10,
+        });
+      } finally {
+        setFetchingDetails(false);
+      }
+    };
+
+    fetchCourseDetails();
+  }, [course?.id]);
+
+  const [thumbnailFile, setThumbnailFile] = useState(null);
+  const [thumbnailPreview, setThumbnailPreview] = useState(null);
+  const [thumbnailError, setThumbnailError] = useState('');
+
+  // File validation function
+  const validateThumbnailFile = (file) => {
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    const maxSize = 5 * 1024 * 1024; // 5MB
+
+    if (!allowedTypes.includes(file.type)) {
+      return 'Please select a valid image file (JPEG, JPG, PNG, or WebP)';
+    }
+
+    if (file.size > maxSize) {
+      return 'File size must be less than 5MB';
+    }
+
+    return null;
+  };
+
+  const handleThumbnailChange = (e) => {
+    const file = e.target.files[0];
+    setThumbnailError('');
+
+    if (!file) {
+      setThumbnailFile(null);
+      setThumbnailPreview(null);
+      return;
+    }
+
+    const error = validateThumbnailFile(file);
+    if (error) {
+      setThumbnailError(error);
+      setThumbnailFile(null);
+      setThumbnailPreview(null);
+      e.target.value = ''; // Clear the input
+      return;
+    }
+
+    setThumbnailFile(file);
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setThumbnailPreview(e.target.result);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleSave = async () => {
     if (!courseData.title || !courseData.description) {
@@ -403,26 +494,54 @@ export const EditCourseModal = ({ course, onClose, onSave }) => {
 
     setLoading(true);
     try {
-      const formData = new FormData();
-      formData.append('title', courseData.title);
-      formData.append('subtitle', courseData.subtitle || '');
-      formData.append('description', courseData.description);
-      formData.append('level', courseData.level);
-      formData.append('course_type', courseData.course_type);
-      formData.append('estimated_hours', courseData.estimated_hours);
+      // Generate slug from title (same logic as create modal)
+      const slug = courseData.title
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, '') // Remove special characters
+        .replace(/\s+/g, '-') // Replace spaces with hyphens
+        .replace(/-+/g, '-') // Replace multiple hyphens with single hyphen
+        .trim('-'); // Remove leading/trailing hyphens
 
-      const response = await api.put(`/courses/instructor/courses/${course.id}/`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
+      // If no thumbnail is being updated, use regular JSON data (no multipart/form-data)
+      if (!thumbnailFile) {
+        const updateData = {
+          title: courseData.title,
+          subtitle: courseData.subtitle || '',
+          description: courseData.description,
+          level: courseData.level,
+          course_type: courseData.course_type,
+          estimated_hours: courseData.estimated_hours,
+          slug: slug, // Include the generated slug
+        };
 
-      console.log('Course updated successfully:', response.data);
+        const response = await api.patch(`/courses/instructor/courses/${course.id}/`, updateData, {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+      } else {
+        // Only use FormData when uploading a new thumbnail
+        const formData = new FormData();
+        formData.append('title', courseData.title);
+        formData.append('subtitle', courseData.subtitle || '');
+        formData.append('description', courseData.description);
+        formData.append('level', courseData.level);
+        formData.append('course_type', courseData.course_type);
+        formData.append('estimated_hours', courseData.estimated_hours);
+        formData.append('slug', slug); // Include the generated slug
+        formData.append('thumbnail', thumbnailFile);
+
+        const response = await api.patch(`/courses/instructor/courses/${course.id}/`, formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        });
+      }
+
       alert('Course updated successfully!');
       onSave(); // This will refresh the courses list and close the modal
     } catch (error) {
       console.error('Error updating course:', error);
-      console.error('Error response:', error.response?.data);
 
       // Show more specific error message
       let errorMessage = 'Unknown error occurred';
@@ -491,7 +610,13 @@ export const EditCourseModal = ({ course, onClose, onSave }) => {
         </div>
         
         <div className="p-6">
-          {activeTab === 'basic' && (
+          {fetchingDetails && (
+            <div className="flex items-center justify-center py-8">
+              <div className="text-gray-500">Loading course details...</div>
+            </div>
+          )}
+
+          {!fetchingDetails && activeTab === 'basic' && (
             <div className="space-y-6">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -558,35 +683,84 @@ export const EditCourseModal = ({ course, onClose, onSave }) => {
                   />
                 </div>
               </div>
+
+              {/* Course Thumbnail Section */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Course Thumbnail
+                </label>
+
+                {/* Current Thumbnail Display */}
+                {course?.thumbnail && !thumbnailPreview && (
+                  <div className="mb-4">
+                    <p className="text-sm text-gray-600 mb-2">Current thumbnail:</p>
+                    <img
+                      src={course.thumbnail}
+                      alt="Current course thumbnail"
+                      className="h-24 w-auto rounded-lg border border-gray-200"
+                    />
+                  </div>
+                )}
+
+                {/* Thumbnail Upload */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-center w-full">
+                    <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
+                      <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                        <svg className="w-8 h-8 mb-4 text-gray-500" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 16">
+                          <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2"/>
+                        </svg>
+                        <p className="mb-2 text-sm text-gray-500">
+                          <span className="font-semibold">Click to change</span> course thumbnail
+                        </p>
+                        <p className="text-xs text-gray-500">JPEG, JPG, PNG or WebP (Max 5MB) - Optional</p>
+                      </div>
+                      <input
+                        type="file"
+                        className="hidden"
+                        accept="image/jpeg,image/jpg,image/png,image/webp"
+                        onChange={handleThumbnailChange}
+                      />
+                    </label>
+                  </div>
+
+                  {thumbnailError && (
+                    <p className="text-sm text-red-600">{thumbnailError}</p>
+                  )}
+
+                  {thumbnailPreview && (
+                    <div className="mt-4">
+                      <p className="text-sm font-medium text-gray-700 mb-2">New thumbnail preview:</p>
+                      <div className="relative inline-block">
+                        <img
+                          src={thumbnailPreview}
+                          alt="New thumbnail preview"
+                          className="h-24 w-auto rounded-lg border border-gray-200"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setThumbnailFile(null);
+                            setThumbnailPreview(null);
+                            setThumbnailError('');
+                          }}
+                          className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
           
-          {activeTab === 'curriculum' && (
-            <div>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-gray-900">Course Sections</h3>
-                <button className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200 text-sm">
-                  Add Section
-                </button>
-              </div>
-              <div className="space-y-3">
-                <div className="border rounded-lg p-4">
-                  <div className="flex items-center justify-between">
-                    <h4 className="font-medium">Section 1: Introduction</h4>
-                    <span className="text-sm text-gray-500">3 lectures</span>
-                  </div>
-                </div>
-                <div className="border rounded-lg p-4">
-                  <div className="flex items-center justify-between">
-                    <h4 className="font-medium">Section 2: Core Concepts</h4>
-                    <span className="text-sm text-gray-500">5 lectures</span>
-                  </div>
-                </div>
-              </div>
-            </div>
+          {!fetchingDetails && activeTab === 'curriculum' && (
+            <CurriculumTab courseId={course.id} />
           )}
           
-          {activeTab === 'pricing' && (
+          {!fetchingDetails && activeTab === 'pricing' && (
             <div className="space-y-6">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -603,14 +777,14 @@ export const EditCourseModal = ({ course, onClose, onSave }) => {
                 <p className="text-sm text-gray-500 mt-2">
                   {courseData.course_type === 'free'
                     ? 'Free courses are available to all users but don\'t generate instructor earnings.'
-                    : 'Coursera Plus courses generate earnings based on student engagement and completion rates.'
+                    : 'Coursera Plus courses are included in the subscription and generate earnings based on student engagement and completion rates.'
                   }
                 </p>
               </div>
             </div>
           )}
           
-          {activeTab === 'settings' && (
+          {!fetchingDetails && activeTab === 'settings' && (
             <div className="space-y-6">
               <div>
                 <h3 className="font-semibold text-gray-900 mb-3">Course Settings</h3>
