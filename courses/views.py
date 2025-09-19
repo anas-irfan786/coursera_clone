@@ -489,7 +489,7 @@ class LectureViewSet(viewsets.ModelViewSet):
 
         lecture = serializer.save(section=section, order=next_order)
 
-        # If this is a video lecture, create video content and subtitles
+        # If this is a video lecture, create the video content
         if lecture.content_type == 'video':
             self._create_video_content(lecture)
 
@@ -500,6 +500,10 @@ class LectureViewSet(viewsets.ModelViewSet):
         # If this is an assignment lecture, create the assignment
         if lecture.content_type == 'assignment':
             self._create_assignment_data(lecture)
+
+        # If this is a reading lecture, create the reading document
+        if lecture.content_type == 'reading':
+            self._create_reading_data(lecture)
 
     def perform_update(self, serializer):
         lecture = serializer.save()
@@ -515,6 +519,10 @@ class LectureViewSet(viewsets.ModelViewSet):
         # Handle assignment updates
         if lecture.content_type == 'assignment':
             self._update_assignment_data(lecture)
+
+        # Handle reading updates
+        if lecture.content_type == 'reading':
+            self._update_reading_data(lecture)
 
     def perform_destroy(self, instance):
         """Delete lecture and reorder all remaining lectures in the section sequentially"""
@@ -543,14 +551,14 @@ class LectureViewSet(viewsets.ModelViewSet):
             video_content, created = VideoContent.objects.get_or_create(
                 lecture=lecture,
                 defaults={
-                    'video_file': lecture.video_file,
+                    'video_file': video_file,
                     'video_url': '',
                 }
             )
 
             # If not created, update the video file
             if not created:
-                video_content.video_file = lecture.video_file
+                video_content.video_file = video_file
                 video_content.save()
 
             # Handle subtitle file if provided
@@ -708,18 +716,20 @@ class LectureViewSet(viewsets.ModelViewSet):
         """Create video content and subtitles for video lectures"""
         from content.models import VideoContent, Subtitle
 
-        # Only create VideoContent for uploaded files, not for YouTube/external URLs
+        # Get video data
         video_file = self.request.FILES.get('video_file')
+        video_url = self.request.data.get('video_url', '')
 
-        if video_file:
-            # Create VideoContent using the video file from the lecture (avoid duplicate saving)
+        # Only create VideoContent if we have video_file or video_url
+        if video_file or video_url:
+            # Create VideoContent record
             video_content = VideoContent.objects.create(
                 lecture=lecture,
-                video_file=lecture.video_file,  # Use the already saved file from lecture
-                video_url='',  # Empty for uploaded files
+                video_file=video_file,
+                video_url=video_url,
             )
 
-            # Handle subtitle file if provided (only for uploaded videos)
+            # Handle subtitle file if provided
             subtitle_file = self.request.FILES.get('subtitle_file')
             if subtitle_file:
                 # Default to English for now, could be made configurable
@@ -730,8 +740,125 @@ class LectureViewSet(viewsets.ModelViewSet):
                     is_auto_generated=False
                 )
 
-        # For YouTube/external URLs, the video_url is already stored in the Lecture model
-        # No need to create VideoContent or Subtitle records
+    def _update_video_content(self, lecture):
+        """Update video content for video lectures"""
+        from content.models import VideoContent, Subtitle
+
+        # Get existing video content if it exists
+        try:
+            video_content = VideoContent.objects.get(lecture=lecture)
+        except VideoContent.DoesNotExist:
+            video_content = None
+
+        # Get video data
+        video_file = self.request.FILES.get('video_file')
+        video_url = self.request.data.get('video_url', '')
+
+        # Only update/create if we have video data
+        if video_file or video_url:
+            if video_content:
+                # Update existing video content
+                if video_file:
+                    video_content.video_file = video_file
+                video_content.video_url = video_url
+                video_content.save()
+            else:
+                # Create new video content
+                video_content = VideoContent.objects.create(
+                    lecture=lecture,
+                    video_file=video_file,
+                    video_url=video_url,
+                )
+
+            # Handle subtitle file if provided
+            subtitle_file = self.request.FILES.get('subtitle_file')
+            if subtitle_file:
+                # Remove existing subtitle and create new one
+                Subtitle.objects.filter(video=video_content, language='en').delete()
+                Subtitle.objects.create(
+                    video=video_content,
+                    language='en',
+                    file=subtitle_file,
+                    is_auto_generated=False
+                )
+
+    def _create_reading_data(self, lecture):
+        """Create reading from lecture data"""
+        from content.models import Reading
+        import os
+
+        # Get content and file data
+        content = self.request.data.get('article_content', '')
+        reading_file = self.request.FILES.get('reading_file')
+        markdown_file = self.request.FILES.get('markdown_file')
+        pdf_file = self.request.FILES.get('pdf_file')
+
+        # Determine which file to use
+        file_to_upload = reading_file or markdown_file or pdf_file
+
+        # Validate file if provided
+        if file_to_upload:
+            file_ext = os.path.splitext(file_to_upload.name)[1].lower()
+            allowed_extensions = ['.pdf', '.md', '.markdown']
+
+            if file_ext not in allowed_extensions:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError(f'Invalid file type. Only PDF and Markdown files are allowed.')
+
+        # Create Reading record (either with content or file or both)
+        if content or file_to_upload:
+            Reading.objects.create(
+                lecture=lecture,
+                content=content,
+                file=file_to_upload,
+                is_downloadable=True
+            )
+
+    def _update_reading_data(self, lecture):
+        """Update reading for reading lectures"""
+        from content.models import Reading
+        import os
+
+        # Get existing reading if it exists
+        existing_reading = None
+        try:
+            existing_reading = Reading.objects.get(lecture=lecture)
+        except Reading.DoesNotExist:
+            pass
+
+        # Get content and file data
+        content = self.request.data.get('article_content', '')
+        reading_file = self.request.FILES.get('reading_file')
+        markdown_file = self.request.FILES.get('markdown_file')
+        pdf_file = self.request.FILES.get('pdf_file')
+
+        # Determine which file to use
+        file_to_upload = reading_file or markdown_file or pdf_file
+
+        # Validate file if provided
+        if file_to_upload:
+            file_ext = os.path.splitext(file_to_upload.name)[1].lower()
+            allowed_extensions = ['.pdf', '.md', '.markdown']
+
+            if file_ext not in allowed_extensions:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError(f'Invalid file type. Only PDF and Markdown files are allowed.')
+
+        if existing_reading:
+            # Update existing reading
+            existing_reading.content = content
+            if file_to_upload:
+                existing_reading.file = file_to_upload
+            existing_reading.save()
+        else:
+            # Create new reading if content or file provided
+            if content or file_to_upload:
+                Reading.objects.create(
+                    lecture=lecture,
+                    content=content,
+                    file=file_to_upload,
+                    is_downloadable=True
+                )
 
     @action(detail=False, methods=['post'], url_path='reorder')
     def reorder_lectures(self, request, section_uuid=None):

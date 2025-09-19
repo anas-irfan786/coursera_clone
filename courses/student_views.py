@@ -83,10 +83,17 @@ def all_courses(request):
     course_data = []
     for course in courses[:20]:  # Limit to 20 for performance
         modules_count = course.sections.count()
-        total_duration = sum([
-            lecture.video_duration for section in course.sections.all() 
-            for lecture in section.lectures.all()
-        ]) / 3600  # Convert to hours
+        total_duration = 0
+        for section in course.sections.all():
+            for lecture in section.lectures.all():
+                if lecture.content_type == 'video':
+                    try:
+                        from content.models import VideoContent
+                        video_content = VideoContent.objects.get(lecture=lecture)
+                        total_duration += video_content.duration
+                    except VideoContent.DoesNotExist:
+                        pass
+        total_duration = total_duration / 3600  # Convert to hours
         
         course_data.append({
             'id': str(course.uuid),

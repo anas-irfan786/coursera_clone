@@ -1,19 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Play, FileText, HelpCircle, ClipboardList, X } from 'lucide-react';
+import { Play, FileText, HelpCircle, ClipboardList, X, BookOpen } from 'lucide-react';
 import VideoLectureForm from './forms/VideoLectureForm';
 import ArticleForm from './forms/ArticleForm';
 import QuizForm from './forms/QuizForm';
 import AssignmentForm from './forms/AssignmentForm';
+import ReadingForm from './forms/ReadingForm';
 
 const LectureModal = ({ lecture, onClose, onSave, title }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [assignmentAttachment, setAssignmentAttachment] = useState(null); // Store file separately
+  const [readingFile, setReadingFile] = useState(null); // Store reading file separately
   const [formData, setFormData] = useState({
     title: lecture?.title || '',
     description: lecture?.description || '',
     content_type: lecture?.content_type || 'video',
-    video_url: lecture?.video_url || '',
-    video_file: lecture?.video_file || null,
+    video_url: lecture?.video_content?.video_url || '',
+    video_file: lecture?.video_content?.video_file || null,
     subtitle_file: null, // New subtitle file
     article_content: lecture?.article_content || '',
     markdown_file: lecture?.markdown_file || null,
@@ -35,9 +37,10 @@ const LectureModal = ({ lecture, onClose, onSave, title }) => {
       instructions: ''
       // Note: attachment is not set to null by default to avoid overriding uploaded files
     },
+    reading_document: lecture?.reading_document || null,
     is_preview: lecture?.is_preview || false,
     is_downloadable: lecture?.is_downloadable || false,
-    existing_video_name: lecture?.existing_video_name || null,
+    existing_video_name: lecture?.video_content?.existing_video_name || null,
     existing_subtitle_name: lecture?.existing_subtitle_name || null
   });
 
@@ -60,9 +63,9 @@ const LectureModal = ({ lecture, onClose, onSave, title }) => {
       }
     }
 
-    if (activeTab === 'article') {
-      if (!formData.article_content && !formData.markdown_file && !formData.pdf_file) {
-        alert('Please provide article content, upload a markdown file, or upload a PDF file');
+    if (activeTab === 'reading') {
+      if (!formData.article_content && !formData.markdown_file && !formData.pdf_file && !readingFile && !formData.reading_document?.existing_file) {
+        alert('Please provide reading content: write rich text, upload a markdown file, or upload a PDF file');
         return false;
       }
     }
@@ -136,14 +139,25 @@ const LectureModal = ({ lecture, onClose, onSave, title }) => {
 
     try {
       setIsUploading(true);
-      // Merge the attachment file with formData before saving
+      // Merge the attachment file and reading file with formData before saving
       const dataToSave = {
         ...formData,
         assignment_settings: {
           ...formData.assignment_settings,
           attachment: assignmentAttachment // Add the file here
-        }
+        },
+        reading_file: readingFile // Add reading file here for backward compatibility
       };
+
+      // For reading lectures, also include specific file types if they exist in formData
+      if (formData.content_type === 'reading') {
+        if (formData.markdown_file) {
+          dataToSave.markdown_file = formData.markdown_file;
+        }
+        if (formData.pdf_file) {
+          dataToSave.pdf_file = formData.pdf_file;
+        }
+      }
       await onSave(dataToSave);
     } catch (error) {
       console.error('Error saving lecture:', error);
@@ -154,7 +168,7 @@ const LectureModal = ({ lecture, onClose, onSave, title }) => {
 
   const contentTypes = [
     { id: 'video', label: 'Video Lecture', icon: Play },
-    { id: 'article', label: 'Reading', icon: FileText },
+    { id: 'reading', label: 'Reading', icon: BookOpen },
     { id: 'quiz', label: 'Quiz', icon: HelpCircle },
     { id: 'assignment', label: 'Assignment', icon: ClipboardList }
   ];
@@ -229,8 +243,13 @@ const LectureModal = ({ lecture, onClose, onSave, title }) => {
             />
           )}
 
-          {activeTab === 'article' && (
-            <ArticleForm formData={formData} setFormData={setFormData} />
+          {activeTab === 'reading' && (
+            <ReadingForm
+              formData={formData}
+              setFormData={setFormData}
+              readingFile={readingFile}
+              setReadingFile={setReadingFile}
+            />
           )}
 
           {activeTab === 'quiz' && (

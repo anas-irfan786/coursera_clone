@@ -63,7 +63,7 @@ const useCurriculum = (courseId) => {
 
       // Add all non-file data
       Object.keys(lectureData).forEach(key => {
-        if (key !== 'video_file' && key !== 'subtitle_file' && key !== 'questions' && key !== 'quiz_settings' && key !== 'assignment_settings') {
+        if (key !== 'video_file' && key !== 'subtitle_file' && key !== 'reading_file' && key !== 'markdown_file' && key !== 'pdf_file' && key !== 'questions' && key !== 'quiz_settings' && key !== 'assignment_settings') {
           if (lectureData[key] !== null && lectureData[key] !== undefined) {
             formData.append(key, lectureData[key]);
           }
@@ -76,6 +76,15 @@ const useCurriculum = (courseId) => {
       }
       if (lectureData.subtitle_file) {
         formData.append('subtitle_file', lectureData.subtitle_file);
+      }
+      if (lectureData.reading_file) {
+        formData.append('reading_file', lectureData.reading_file);
+      }
+      if (lectureData.markdown_file) {
+        formData.append('markdown_file', lectureData.markdown_file);
+      }
+      if (lectureData.pdf_file) {
+        formData.append('pdf_file', lectureData.pdf_file);
       }
 
       // Handle assignment attachment file separately
@@ -135,7 +144,7 @@ const useCurriculum = (courseId) => {
 
       // Add all non-file data
       Object.keys(lectureData).forEach(key => {
-        if (key !== 'video_file' && key !== 'subtitle_file' && key !== 'questions' && key !== 'quiz_settings' && key !== 'assignment_settings') {
+        if (key !== 'video_file' && key !== 'subtitle_file' && key !== 'reading_file' && key !== 'markdown_file' && key !== 'pdf_file' && key !== 'questions' && key !== 'quiz_settings' && key !== 'assignment_settings') {
           if (lectureData[key] !== null && lectureData[key] !== undefined) {
             formData.append(key, lectureData[key]);
           }
@@ -148,6 +157,15 @@ const useCurriculum = (courseId) => {
       }
       if (lectureData.subtitle_file) {
         formData.append('subtitle_file', lectureData.subtitle_file);
+      }
+      if (lectureData.reading_file) {
+        formData.append('reading_file', lectureData.reading_file);
+      }
+      if (lectureData.markdown_file) {
+        formData.append('markdown_file', lectureData.markdown_file);
+      }
+      if (lectureData.pdf_file) {
+        formData.append('pdf_file', lectureData.pdf_file);
       }
 
       // Handle assignment attachment file separately

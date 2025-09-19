@@ -163,10 +163,9 @@ class Section(BaseModel):
 class Lecture(BaseModel):
     CONTENT_TYPE_CHOICES = (
         ('video', 'Video'),
-        ('article', 'Article'),
+        ('reading', 'Reading'),
         ('quiz', 'Quiz'),
         ('assignment', 'Assignment'),
-        ('resource', 'Resource'),
     )
     
     section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='lectures')
@@ -175,12 +174,7 @@ class Lecture(BaseModel):
     content_type = models.CharField(max_length=20, choices=CONTENT_TYPE_CHOICES)
     order = models.IntegerField(default=0)
     
-    # Content
-    video_url = models.URLField(blank=True, null=True)
-    video_file = models.FileField(upload_to='lectures/videos/', blank=True, null=True)
-    video_duration = models.IntegerField(default=0)  # in seconds
-
-    article_content = models.TextField(blank=True)
+    # Content will be handled by specific content models (VideoContent, Reading, Quiz, Assignment)
     
     # Settings
     is_preview = models.BooleanField(default=False)

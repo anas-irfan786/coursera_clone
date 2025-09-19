@@ -20,6 +20,9 @@ class LectureSerializer(serializers.ModelSerializer):
     quiz_settings = serializers.SerializerMethodField()
     questions = serializers.SerializerMethodField()
     assignment_settings = serializers.SerializerMethodField()
+    reading_document = serializers.SerializerMethodField()
+    video_content = serializers.SerializerMethodField()
+    article_content = serializers.SerializerMethodField()  # For reading content
     subtitle_file = serializers.SerializerMethodField()
     existing_video_name = serializers.SerializerMethodField()
     existing_subtitle_name = serializers.SerializerMethodField()
@@ -27,9 +30,9 @@ class LectureSerializer(serializers.ModelSerializer):
     class Meta:
         model = Lecture
         fields = ['id', 'title', 'description', 'content_type', 'order',
-                 'video_url', 'video_file', 'video_duration', 'article_content',
                  'is_preview', 'is_downloadable', 'resources', 'completion_rate',
-                 'quiz_settings', 'questions', 'assignment_settings', 'subtitle_file',
+                 'quiz_settings', 'questions', 'assignment_settings', 'reading_document',
+                 'video_content', 'article_content', 'subtitle_file',
                  'existing_video_name', 'existing_subtitle_name']
 
     def get_completion_rate(self, obj):
@@ -130,6 +133,76 @@ class LectureSerializer(serializers.ModelSerializer):
                 'allow_late_submission': True
             }
 
+    def get_reading_document(self, obj):
+        """Return reading information if this is a reading lecture"""
+        if obj.content_type != 'reading':
+            return None
+
+        try:
+            from content.models import Reading
+            reading = Reading.objects.get(lecture=obj)
+            import os
+
+            # Determine file type based on extension
+            file_type = None
+            if reading.file:
+                file_ext = os.path.splitext(reading.file.name)[1].lower()
+                if file_ext == '.pdf':
+                    file_type = 'pdf_file'
+                elif file_ext in ['.md', '.markdown']:
+                    file_type = 'markdown_file'
+
+            return {
+                'file': reading.file.url if reading.file else None,
+                'existing_file': reading.file.url if reading.file else None,
+                'file_name': os.path.basename(reading.file.name) if reading.file else None,
+                'file_type': file_type,
+                'is_downloadable': reading.is_downloadable
+            }
+        except Reading.DoesNotExist:
+            return {
+                'file': None,
+                'existing_file': None,
+                'file_name': None,
+                'file_type': None,
+                'is_downloadable': True
+            }
+
+    def get_video_content(self, obj):
+        """Return video content information if this is a video lecture"""
+        if obj.content_type != 'video':
+            return None
+
+        try:
+            from content.models import VideoContent
+            video = VideoContent.objects.get(lecture=obj)
+            import os
+            return {
+                'video_url': video.video_url,
+                'video_file': video.video_file.url if video.video_file else None,
+                'duration': video.duration,
+                'existing_video_name': os.path.basename(video.video_file.name) if video.video_file else None,
+            }
+        except VideoContent.DoesNotExist:
+            return {
+                'video_url': '',
+                'video_file': None,
+                'duration': 0,
+                'existing_video_name': None,
+            }
+
+    def get_article_content(self, obj):
+        """Return reading content if this is a reading lecture"""
+        if obj.content_type != 'reading':
+            return ''
+
+        try:
+            from content.models import Reading
+            reading = Reading.objects.get(lecture=obj)
+            return reading.content
+        except Reading.DoesNotExist:
+            return ''
+
     def get_subtitle_file(self, obj):
         """Return subtitle file URL if it exists"""
         if obj.content_type != 'video':
@@ -149,11 +222,6 @@ class LectureSerializer(serializers.ModelSerializer):
         """Return the name of existing video file"""
         if obj.content_type != 'video':
             return None
-
-        # Check if video file exists in Lecture model
-        if obj.video_file:
-            import os
-            return os.path.basename(obj.video_file.name)
 
         # Check if video file exists in VideoContent model
         try:
@@ -195,7 +263,16 @@ class SectionSerializer(serializers.ModelSerializer):
                  'lectures', 'total_duration']
     
     def get_total_duration(self, obj):
-        return sum([lecture.video_duration for lecture in obj.lectures.all()])
+        total = 0
+        for lecture in obj.lectures.all():
+            if lecture.content_type == 'video':
+                try:
+                    from content.models import VideoContent
+                    video_content = VideoContent.objects.get(lecture=lecture)
+                    total += video_content.duration
+                except VideoContent.DoesNotExist:
+                    pass
+        return total
 
 class CourseListSerializer(serializers.ModelSerializer):
     """Simplified serializer for course listing"""
