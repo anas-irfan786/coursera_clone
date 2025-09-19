@@ -4,7 +4,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
-from django.db.models import Count, Avg, Sum, Q, F
+from django.db.models import Count, Avg, Sum, Q, F, Max
 from datetime import datetime, timedelta
 from django.utils import timezone
 from django.utils.text import slugify
@@ -18,6 +18,7 @@ from .serializers import (
 from enrollments.models import Enrollment
 from payments.models import InstructorEarning
 from reviews.models import CourseReview
+from assessments.models import Quiz, Question, QuestionOption, Assignment
 
 class IsInstructor(IsAuthenticated):
     """Custom permission for instructors only"""
@@ -387,7 +388,75 @@ class SectionViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         course_uuid = self.kwargs.get('course_uuid')
         course = get_object_or_404(Course, uuid=course_uuid, instructor=self.request.user)
-        serializer.save(course=course)
+
+        # Auto-assign the next available order (count-based to avoid gaps)
+        current_count = Section.objects.filter(course=course).count()
+        next_order = current_count + 1
+
+        serializer.save(course=course, order=next_order)
+
+    def perform_destroy(self, instance):
+        """Delete section and reorder all remaining sections in the course sequentially"""
+        course = instance.course
+
+        # Delete the instance
+        super().perform_destroy(instance)
+
+        # Reorder ALL remaining sections in the course to ensure sequential numbering (1, 2, 3, ...)
+        remaining_sections = Section.objects.filter(course=course).order_by('order')
+
+        # Update order to be sequential starting from 1
+        for i, section in enumerate(remaining_sections, 1):
+            if section.order != i:
+                section.order = i
+                section.save()
+
+    @action(detail=False, methods=['post'], url_path='reorder')
+    def reorder_sections(self, request, course_uuid=None):
+        """Reorder sections within a course"""
+        try:
+            # Get course_uuid from kwargs or parameter
+            course_uuid = course_uuid or self.kwargs.get('course_uuid')
+            course = get_object_or_404(Course, uuid=course_uuid, instructor=request.user)
+
+            section_orders = request.data.get('section_orders', [])
+
+            # Use transaction to avoid unique constraint violations
+            from django.db import transaction
+
+            with transaction.atomic():
+                # First, collect all sections to update
+                sections_to_update = []
+                for item in section_orders:
+                    section_uuid = item.get('uuid')
+                    new_order = item.get('order')
+
+                    try:
+                        section = Section.objects.get(
+                            uuid=section_uuid,
+                            course=course
+                        )
+                        sections_to_update.append((section, new_order))
+                    except Section.DoesNotExist:
+                        continue
+
+                # Step 1: Set all sections to temporary high order values (1000+)
+                for i, (section, new_order) in enumerate(sections_to_update):
+                    section.order = 1000 + i  # Temporary high value
+                    section.save()
+
+                # Step 2: Now set the final order values
+                for section, new_order in sections_to_update:
+                    section.order = new_order
+                    section.save()
+
+            return Response({'message': 'Sections reordered successfully'})
+
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to reorder sections: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 class LectureViewSet(viewsets.ModelViewSet):
     serializer_class = LectureSerializer
@@ -413,4 +482,304 @@ class LectureViewSet(viewsets.ModelViewSet):
             uuid=section_uuid,
             course__instructor=self.request.user
         )
-        serializer.save(section=section)
+
+        # Auto-assign the next available order (count-based to avoid gaps)
+        current_count = Lecture.objects.filter(section=section).count()
+        next_order = current_count + 1
+
+        lecture = serializer.save(section=section, order=next_order)
+
+        # If this is a video lecture, create video content and subtitles
+        if lecture.content_type == 'video':
+            self._create_video_content(lecture)
+
+        # If this is a quiz lecture, create the quiz and questions
+        if lecture.content_type == 'quiz':
+            self._create_quiz_data(lecture)
+
+        # If this is an assignment lecture, create the assignment
+        if lecture.content_type == 'assignment':
+            self._create_assignment_data(lecture)
+
+    def perform_update(self, serializer):
+        lecture = serializer.save()
+
+        # Handle video content updates
+        if lecture.content_type == 'video':
+            self._update_video_content(lecture)
+
+        # Handle quiz updates
+        if lecture.content_type == 'quiz':
+            self._update_quiz_data(lecture)
+
+        # Handle assignment updates
+        if lecture.content_type == 'assignment':
+            self._update_assignment_data(lecture)
+
+    def perform_destroy(self, instance):
+        """Delete lecture and reorder all remaining lectures in the section sequentially"""
+        section = instance.section
+
+        # Delete the instance
+        super().perform_destroy(instance)
+
+        # Reorder ALL remaining lectures in the section to ensure sequential numbering (1, 2, 3, ...)
+        remaining_lectures = Lecture.objects.filter(section=section).order_by('order')
+
+        # Update order to be sequential starting from 1
+        for i, lecture in enumerate(remaining_lectures, 1):
+            if lecture.order != i:
+                lecture.order = i
+                lecture.save()
+
+    def _update_video_content(self, lecture):
+        """Update or create video content for video lectures"""
+        from content.models import VideoContent, Subtitle
+
+        video_file = self.request.FILES.get('video_file')
+
+        if video_file:
+            # Get or create VideoContent
+            video_content, created = VideoContent.objects.get_or_create(
+                lecture=lecture,
+                defaults={
+                    'video_file': lecture.video_file,
+                    'video_url': '',
+                }
+            )
+
+            # If not created, update the video file
+            if not created:
+                video_content.video_file = lecture.video_file
+                video_content.save()
+
+            # Handle subtitle file if provided
+            subtitle_file = self.request.FILES.get('subtitle_file')
+            if subtitle_file:
+                # Update or create subtitle
+                subtitle, created = Subtitle.objects.get_or_create(
+                    video=video_content,
+                    language='en',
+                    defaults={
+                        'file': subtitle_file,
+                        'is_auto_generated': False
+                    }
+                )
+                if not created:
+                    subtitle.file = subtitle_file
+                    subtitle.save()
+
+    def _update_quiz_data(self, lecture):
+        """Update quiz data - for now, we'll recreate it"""
+        from assessments.models import Quiz
+
+        # Delete existing quiz if it exists
+        try:
+            existing_quiz = Quiz.objects.get(lecture=lecture)
+            existing_quiz.delete()
+        except Quiz.DoesNotExist:
+            pass
+
+        # Create new quiz with updated data
+        self._create_quiz_data(lecture)
+
+    def _update_assignment_data(self, lecture):
+        """Update assignment data - preserve existing attachment if no new one provided"""
+        from assessments.models import Assignment
+
+        # Get existing assignment if it exists
+        existing_assignment = None
+        try:
+            existing_assignment = Assignment.objects.get(lecture=lecture)
+        except Assignment.DoesNotExist:
+            pass
+
+        # If we have an existing assignment, preserve its file if no new file is uploaded
+        if existing_assignment:
+            existing_attachment = existing_assignment.attachment
+            existing_assignment.delete()
+
+            # Create new assignment with updated data
+            self._create_assignment_data(lecture)
+
+            # If no new attachment was provided, restore the old one
+            request_data = self.request.data
+            attachment_file = request_data.get('attachment') or self.request.FILES.get('attachment')
+            if not attachment_file and existing_attachment:
+                updated_assignment = Assignment.objects.get(lecture=lecture)
+                updated_assignment.attachment = existing_attachment
+                updated_assignment.save()
+        else:
+            # Create new assignment with updated data
+            self._create_assignment_data(lecture)
+
+    def _create_quiz_data(self, lecture):
+        """Create quiz, questions and options from lecture data"""
+        request_data = self.request.data
+
+        # Create Quiz
+        quiz_settings = request_data.get('quiz_settings', {})
+        # Handle JSON string from FormData
+        if isinstance(quiz_settings, str):
+            import json
+            quiz_settings = json.loads(quiz_settings)
+        quiz = Quiz.objects.create(
+            course=lecture.section.course,
+            section=lecture.section,
+            lecture=lecture,
+            title=lecture.title,
+            description=lecture.description or '',
+            passing_score=quiz_settings.get('passing_score', 60),
+            time_limit=quiz_settings.get('time_limit'),
+            max_attempts=quiz_settings.get('max_attempts', 3),
+            weight=quiz_settings.get('weight', 0),
+            randomize_questions=quiz_settings.get('randomize_questions', False),
+            show_answers=quiz_settings.get('show_answers', True)
+        )
+
+        # Create Questions and Options
+        questions_data = request_data.get('questions', [])
+        # Handle JSON string from FormData
+        if isinstance(questions_data, str):
+            import json
+            questions_data = json.loads(questions_data)
+        for order, question_data in enumerate(questions_data):
+            question = Question.objects.create(
+                quiz=quiz,
+                question_text=question_data.get('question_text', ''),
+                question_type=question_data.get('question_type', 'multiple_choice'),
+                order=order,
+                points=question_data.get('points', 1),
+                explanation=question_data.get('explanation', '')
+            )
+
+            # Create Options
+            options_data = question_data.get('options', [])
+            for option_order, option_data in enumerate(options_data):
+                QuestionOption.objects.create(
+                    question=question,
+                    option_text=option_data.get('option_text', ''),
+                    is_correct=option_data.get('is_correct', False),
+                    order=option_data.get('order', option_order)
+                )
+
+    def _create_assignment_data(self, lecture):
+        """Create assignment from lecture data"""
+        request_data = self.request.data
+        assignment_settings = request_data.get('assignment_settings', {})
+        # Handle JSON string from FormData
+        if isinstance(assignment_settings, str):
+            import json
+            assignment_settings = json.loads(assignment_settings)
+
+        # Parse due date if provided
+        due_date = None
+        if assignment_settings.get('due_date'):
+            try:
+                from datetime import datetime
+                from django.utils import timezone
+                # Parse the datetime from frontend (which sends local time)
+                naive_datetime = datetime.fromisoformat(assignment_settings['due_date'].replace('T', ' '))
+                # Convert from local timezone to UTC for storage
+                due_date = timezone.make_aware(naive_datetime, timezone=timezone.get_current_timezone())
+            except (ValueError, AttributeError):
+                pass
+
+        # Handle attachment file
+        attachment_file = request_data.get('attachment') or self.request.FILES.get('attachment')
+
+        # Create Assignment record
+        Assignment.objects.create(
+            course=lecture.section.course,
+            section=lecture.section,
+            lecture=lecture,
+            title=lecture.title,
+            description=lecture.description or '',
+            instructions=assignment_settings.get('instructions', ''),
+            max_points=assignment_settings.get('max_points', 100),
+            passing_score=assignment_settings.get('passing_score', 60),
+            weight=assignment_settings.get('weight', 0),
+            due_date=due_date,
+            attachment=attachment_file,
+            allow_late_submission=assignment_settings.get('allow_late_submission', True),
+        )
+
+    def _create_video_content(self, lecture):
+        """Create video content and subtitles for video lectures"""
+        from content.models import VideoContent, Subtitle
+
+        # Only create VideoContent for uploaded files, not for YouTube/external URLs
+        video_file = self.request.FILES.get('video_file')
+
+        if video_file:
+            # Create VideoContent using the video file from the lecture (avoid duplicate saving)
+            video_content = VideoContent.objects.create(
+                lecture=lecture,
+                video_file=lecture.video_file,  # Use the already saved file from lecture
+                video_url='',  # Empty for uploaded files
+            )
+
+            # Handle subtitle file if provided (only for uploaded videos)
+            subtitle_file = self.request.FILES.get('subtitle_file')
+            if subtitle_file:
+                # Default to English for now, could be made configurable
+                Subtitle.objects.create(
+                    video=video_content,
+                    language='en',
+                    file=subtitle_file,
+                    is_auto_generated=False
+                )
+
+        # For YouTube/external URLs, the video_url is already stored in the Lecture model
+        # No need to create VideoContent or Subtitle records
+
+    @action(detail=False, methods=['post'], url_path='reorder')
+    def reorder_lectures(self, request, section_uuid=None):
+        """Reorder lectures within a section"""
+        try:
+            # Get section_uuid from kwargs or parameter
+            section_uuid = section_uuid or self.kwargs.get('section_uuid')
+            section = get_object_or_404(
+                Section,
+                uuid=section_uuid,
+                course__instructor=request.user
+            )
+
+            lecture_orders = request.data.get('lecture_orders', [])
+
+            # Use transaction to avoid unique constraint violations
+            from django.db import transaction
+
+            with transaction.atomic():
+                # First, collect all lectures to update
+                lectures_to_update = []
+                for item in lecture_orders:
+                    lecture_uuid = item.get('uuid')
+                    new_order = item.get('order')
+
+                    try:
+                        lecture = Lecture.objects.get(
+                            uuid=lecture_uuid,
+                            section=section
+                        )
+                        lectures_to_update.append((lecture, new_order))
+                    except Lecture.DoesNotExist:
+                        continue
+
+                # Step 1: Set all lectures to temporary high order values (1000+)
+                for i, (lecture, new_order) in enumerate(lectures_to_update):
+                    lecture.order = 1000 + i  # Temporary high value
+                    lecture.save()
+
+                # Step 2: Now set the final order values
+                for lecture, new_order in lectures_to_update:
+                    lecture.order = new_order
+                    lecture.save()
+
+            return Response({'message': 'Lectures reordered successfully'})
+
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to reorder lectures: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )

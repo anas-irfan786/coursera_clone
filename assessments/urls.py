@@ -1,8 +1,12 @@
-from django.urls import path
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
 from . import views
 
 app_name = 'assessments'
 
+router = DefaultRouter()
+router.register(r'quizzes', views.QuizViewSet, basename='quiz')
+
 urlpatterns = [
-    # Add your URL patterns here
+    path('api/', include(router.urls)),
 ]

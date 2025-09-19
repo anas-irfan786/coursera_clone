@@ -4,6 +4,17 @@ import { Upload } from 'lucide-react';
 const ArticleForm = ({ formData, setFormData }) => {
   const [contentSource, setContentSource] = useState('text');
 
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      if (contentSource === 'markdown') {
+        setFormData({ ...formData, markdown_file: file, pdf_file: null, article_content: '' });
+      } else if (contentSource === 'pdf') {
+        setFormData({ ...formData, pdf_file: file, markdown_file: null, article_content: '' });
+      }
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div>
@@ -51,7 +62,7 @@ const ArticleForm = ({ formData, setFormData }) => {
           </label>
           <textarea
             value={formData.article_content}
-            onChange={(e) => setFormData({...formData, article_content: e.target.value})}
+            onChange={(e) => setFormData({...formData, article_content: e.target.value, markdown_file: null, pdf_file: null})}
             rows="10"
             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
             placeholder="Write your article content here..."
@@ -73,6 +84,7 @@ const ArticleForm = ({ formData, setFormData }) => {
             <input
               type="file"
               accept={contentSource === 'markdown' ? '.md' : '.pdf'}
+              onChange={handleFileChange}
               className="hidden"
               id="content-upload"
             />

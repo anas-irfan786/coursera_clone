@@ -26,5 +26,5 @@ db.sqlite3
 # claude
 .claude/
 
-#thumbnails
-course_thumbnails
+#media
+media

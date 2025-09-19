@@ -4,7 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
-from django.db.models import Count, Avg, Sum, Q
+from django.db.models import Count, Avg, Sum, Q, Max
 from datetime import datetime, timedelta
 from django.utils import timezone
 
@@ -13,6 +13,7 @@ from .serializers import (
     CourseListSerializer, CourseDetailSerializer, CourseCreateSerializer,
     SectionSerializer, LectureSerializer
 )
+from assessments.models import Quiz, Question, QuestionOption
 from enrollments.models import Enrollment
 from payments.models import InstructorEarning, Payment
 from reviews.models import CourseReview
@@ -197,11 +198,35 @@ class SectionViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         course_uuid = self.kwargs.get('course_uuid')
         course = get_object_or_404(Course, uuid=course_uuid, instructor=self.request.user)
-        serializer.save(course=course)
+
+        # Auto-assign the next available order (count-based to avoid gaps)
+        current_count = Section.objects.filter(course=course).count()
+        next_order = current_count + 1
+
+        serializer.save(course=course, order=next_order)
+
+    def perform_destroy(self, instance):
+        """Delete section and reorder all remaining sections in the course sequentially"""
+        course = instance.course
+
+        # Delete the instance
+        super().perform_destroy(instance)
+
+        # Reorder ALL remaining sections in the course to ensure sequential numbering (1, 2, 3, ...)
+        remaining_sections = Section.objects.filter(course=course).order_by('order')
+
+        # Update order to be sequential starting from 1
+        for i, section in enumerate(remaining_sections, 1):
+            if section.order != i:
+                section.order = i
+                section.save()
 
 class LectureViewSet(viewsets.ModelViewSet):
     serializer_class = LectureSerializer
     permission_classes = [IsInstructor]
+
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
     
     def get_queryset(self):
         section_uuid = self.kwargs.get('section_uuid')
@@ -216,8 +241,139 @@ class LectureViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         section_uuid = self.kwargs.get('section_uuid')
         section = get_object_or_404(Section, uuid=section_uuid)
-        
+
         if section.course.instructor != self.request.user:
             raise PermissionError("You don't have permission to add lectures to this section")
-        
-        serializer.save(section=section)
+
+        # Auto-assign the next available order (count-based to avoid gaps)
+        current_count = Lecture.objects.filter(section=section).count()
+        next_order = current_count + 1
+
+        lecture = serializer.save(section=section, order=next_order)
+
+        # If this is a quiz lecture, create the quiz and questions
+        if lecture.content_type == 'quiz':
+            self._create_quiz_data(lecture)
+
+    def _create_quiz_data(self, lecture):
+        """Create quiz, questions and options from lecture data"""
+        request_data = self.request.data
+
+        # Create Quiz
+        quiz_settings = request_data.get('quiz_settings', {})
+        quiz = Quiz.objects.create(
+            course=lecture.section.course,
+            section=lecture.section,
+            lecture=lecture,
+            title=lecture.title,
+            description=lecture.description or '',
+            passing_score=quiz_settings.get('passing_score', 60),
+            time_limit=quiz_settings.get('time_limit'),
+            max_attempts=quiz_settings.get('max_attempts', 3),
+            weight=quiz_settings.get('weight', 0),
+            randomize_questions=quiz_settings.get('randomize_questions', False),
+            show_answers=quiz_settings.get('show_answers', True)
+        )
+
+        # Create Questions and Options
+        questions_data = request_data.get('questions', [])
+        for order, question_data in enumerate(questions_data):
+            question = Question.objects.create(
+                quiz=quiz,
+                question_text=question_data.get('question_text', ''),
+                question_type=question_data.get('question_type', 'multiple_choice'),
+                order=order,
+                points=question_data.get('points', 1),
+                explanation=question_data.get('explanation', '')
+            )
+
+            # Create Options
+            options_data = question_data.get('options', [])
+            for option_order, option_data in enumerate(options_data):
+                QuestionOption.objects.create(
+                    question=question,
+                    option_text=option_data.get('option_text', ''),
+                    is_correct=option_data.get('is_correct', False),
+                    order=option_data.get('order', option_order)
+                )
+
+    def perform_update(self, serializer):
+        lecture = serializer.save()
+
+        # If this is a quiz lecture, update the quiz data
+        if lecture.content_type == 'quiz':
+            self._update_quiz_data(lecture)
+
+    def perform_destroy(self, instance):
+        """Delete lecture and reorder all remaining lectures in the section sequentially"""
+        section = instance.section
+
+        # Delete the instance
+        super().perform_destroy(instance)
+
+        # Reorder ALL remaining lectures in the section to ensure sequential numbering (1, 2, 3, ...)
+        remaining_lectures = Lecture.objects.filter(section=section).order_by('order')
+
+        # Update order to be sequential starting from 1
+        for i, lecture in enumerate(remaining_lectures, 1):
+            if lecture.order != i:
+                lecture.order = i
+                lecture.save()
+
+    def _update_quiz_data(self, lecture):
+        """Update quiz, questions and options from lecture data"""
+        request_data = self.request.data
+
+        # Debug logging
+        print(f"DEBUG: Updating quiz for lecture: {lecture.title}")
+        print(f"DEBUG: Request data keys: {request_data.keys()}")
+        print(f"DEBUG: Quiz settings: {request_data.get('quiz_settings', {})}")
+        print(f"DEBUG: Questions data: {request_data.get('questions', [])}")
+
+        # Get or create Quiz
+        quiz, created = Quiz.objects.get_or_create(
+            lecture=lecture,
+            defaults={
+                'course': lecture.section.course,
+                'section': lecture.section,
+                'title': lecture.title,
+                'description': lecture.description or ''
+            }
+        )
+
+        # Update Quiz settings
+        quiz_settings = request_data.get('quiz_settings', {})
+        quiz.title = lecture.title
+        quiz.description = lecture.description or ''
+        quiz.passing_score = quiz_settings.get('passing_score', 60)
+        quiz.time_limit = quiz_settings.get('time_limit')
+        quiz.max_attempts = quiz_settings.get('max_attempts', 3)
+        quiz.weight = quiz_settings.get('weight', 0)
+        quiz.randomize_questions = quiz_settings.get('randomize_questions', False)
+        quiz.show_answers = quiz_settings.get('show_answers', True)
+        quiz.save()
+
+        # Delete existing questions and options
+        quiz.questions.all().delete()
+
+        # Create new Questions and Options
+        questions_data = request_data.get('questions', [])
+        for order, question_data in enumerate(questions_data):
+            question = Question.objects.create(
+                quiz=quiz,
+                question_text=question_data.get('question_text', ''),
+                question_type=question_data.get('question_type', 'multiple_choice'),
+                order=order,
+                points=question_data.get('points', 1),
+                explanation=question_data.get('explanation', '')
+            )
+
+            # Create Options
+            options_data = question_data.get('options', [])
+            for option_order, option_data in enumerate(options_data):
+                QuestionOption.objects.create(
+                    question=question,
+                    option_text=option_data.get('option_text', ''),
+                    is_correct=option_data.get('is_correct', False),
+                    order=option_data.get('order', option_order)
+                )

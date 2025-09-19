@@ -1,4 +1,18 @@
 import React, { useState } from 'react';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
 import useCurriculum from './curriculum/useCurriculum';
 import CurriculumHeader from './curriculum/CurriculumHeader';
 import EmptyState from './curriculum/EmptyState';
@@ -15,8 +29,18 @@ const CurriculumTab = ({ courseId }) => {
     deleteSection,
     createLecture,
     updateLecture,
-    deleteLecture
+    deleteLecture,
+    reorderSections,
+    reorderLectures,
+    reorderQuizQuestions
   } = useCurriculum(courseId);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   const [showAddSection, setShowAddSection] = useState(false);
   const [editingSection, setEditingSection] = useState(null);
@@ -45,30 +69,62 @@ const CurriculumTab = ({ courseId }) => {
     setEditingLecture(null);
   };
 
+  const handleDragEnd = (event) => {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id) {
+      return;
+    }
+
+    // Handle section reordering
+    if (active.data.current?.type === 'section' && over.data.current?.type === 'section') {
+      const oldIndex = sections.findIndex((section) => section.id === active.id);
+      const newIndex = sections.findIndex((section) => section.id === over.id);
+
+      if (oldIndex !== newIndex) {
+        const newSections = arrayMove(sections, oldIndex, newIndex);
+        reorderSections(newSections);
+      }
+    }
+  };
+
   if (loading) {
     return <div className="text-center py-8 text-gray-500">Loading curriculum...</div>;
   }
 
   return (
     <div className="space-y-6">
-      <CurriculumHeader onAddSection={() => setShowAddSection(true)} />
+      <CurriculumHeader onAddSection={() => setShowAddSection(true)} sections={sections} />
 
       {sections.length === 0 && (
         <EmptyState onAddSection={() => setShowAddSection(true)} />
       )}
 
-      {sections.map((section, sectionIndex) => (
-        <SectionComponent
-          key={section.id}
-          section={section}
-          sectionIndex={sectionIndex}
-          onEdit={() => setEditingSection(section)}
-          onDelete={() => deleteSection(section.id)}
-          onAddLecture={() => setShowAddLecture(section.id)}
-          onEditLecture={setEditingLecture}
-          onDeleteLecture={deleteLecture}
-        />
-      ))}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext
+          items={sections.map(s => s.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          {sections.map((section, sectionIndex) => (
+            <SectionComponent
+              key={section.id}
+              section={section}
+              sectionIndex={sectionIndex}
+              onEdit={() => setEditingSection(section)}
+              onDelete={() => deleteSection(section.id)}
+              onAddLecture={() => setShowAddLecture(section.id)}
+              onEditLecture={setEditingLecture}
+              onDeleteLecture={deleteLecture}
+              onReorderLectures={reorderLectures}
+              onReorderQuizQuestions={reorderQuizQuestions}
+            />
+          ))}
+        </SortableContext>
+      </DndContext>
 
       {showAddSection && (
         <SectionModal

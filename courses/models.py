@@ -179,7 +179,7 @@ class Lecture(BaseModel):
     video_url = models.URLField(blank=True, null=True)
     video_file = models.FileField(upload_to='lectures/videos/', blank=True, null=True)
     video_duration = models.IntegerField(default=0)  # in seconds
-    
+
     article_content = models.TextField(blank=True)
     
     # Settings

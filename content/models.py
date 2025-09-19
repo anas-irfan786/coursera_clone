@@ -9,7 +9,7 @@ class VideoContent(BaseModel):
                                   related_name='video_content')
     
     # Video files
-    video_file = models.FileField(upload_to='videos/lectures/')
+    video_file = models.FileField(upload_to='lectures/videos/')
     video_url = models.URLField(blank=True)  # For external videos
     
     # Video metadata
@@ -54,7 +54,7 @@ class Subtitle(BaseModel):
     video = models.ForeignKey(VideoContent, on_delete=models.CASCADE,
                              related_name='subtitles')
     language = models.CharField(max_length=10, choices=LANGUAGE_CHOICES)
-    file = models.FileField(upload_to='subtitles/')
+    file = models.FileField(upload_to='lectures/subtitles/')
     is_auto_generated = models.BooleanField(default=False)
     
     class Meta:

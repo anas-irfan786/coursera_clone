@@ -107,21 +107,27 @@ class Assignment(BaseModel):
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='assignments')
     section = models.ForeignKey(Section, on_delete=models.CASCADE,
                                related_name='assignments', null=True, blank=True)
-    
+    lecture = models.ForeignKey(Lecture, on_delete=models.CASCADE,
+                               related_name='assignment', null=True, blank=True)
+
     title = models.CharField(max_length=200)
-    description = models.TextField()
+    description = models.TextField(blank=True)
     instructions = models.TextField()
-    
-    # Settings
+
+    # Grading Settings
     max_points = models.IntegerField(default=100)
+    passing_score = models.IntegerField(default=60)  # Percentage
+    weight = models.DecimalField(max_digits=5, decimal_places=2, default=0)  # Weight in final grade
     due_date = models.DateTimeField(null=True, blank=True)
-    
+
     # Files
-    attachment = models.FileField(upload_to='assignments/', blank=True, null=True)
-    
+    attachment = models.FileField(upload_to='lectures/assignments/', blank=True, null=True)
+
     # Submission settings
     allow_late_submission = models.BooleanField(default=True)
     late_penalty_percent = models.IntegerField(default=10)
+
+    is_active = models.BooleanField(default=True)
     
     class Meta:
         db_table = 'assignments'

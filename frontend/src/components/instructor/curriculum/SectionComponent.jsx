@@ -1,5 +1,21 @@
 import React, { useState } from 'react';
 import { Plus, Edit3, Trash2, GripVertical } from 'lucide-react';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
 import LectureItem from './LectureItem';
 
 const SectionComponent = ({
@@ -9,15 +25,68 @@ const SectionComponent = ({
   onDelete,
   onAddLecture,
   onEditLecture,
-  onDeleteLecture
+  onDeleteLecture,
+  onReorderLectures,
+  onReorderQuizQuestions
 }) => {
   const [collapsed, setCollapsed] = useState(false);
 
+  // Make section sortable
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: section.id,
+    data: {
+      type: 'section',
+    },
+  });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  // Lecture drag sensors
+  const lectureSensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleLectureDragEnd = (event) => {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id) {
+      return;
+    }
+
+    const lectures = section.lectures || [];
+    const oldIndex = lectures.findIndex((lecture) => lecture.id === active.id);
+    const newIndex = lectures.findIndex((lecture) => lecture.id === over.id);
+
+    if (oldIndex !== newIndex) {
+      const newLectures = arrayMove(lectures, oldIndex, newIndex);
+      onReorderLectures(section.id, newLectures);
+    }
+  };
+
   return (
-    <div className="border border-gray-200 rounded-lg">
+    <div ref={setNodeRef} style={style} className="border border-gray-200 rounded-lg">
       <div className="bg-gray-50 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <GripVertical size={16} className="text-gray-400 cursor-move" />
+          <GripVertical
+            size={16}
+            className="text-gray-400 cursor-move"
+            {...attributes}
+            {...listeners}
+          />
           <button
             onClick={() => setCollapsed(!collapsed)}
             className="text-left flex-1"
@@ -71,17 +140,29 @@ const SectionComponent = ({
               </button>
             </div>
           ) : (
-            <div className="space-y-2">
-              {section.lectures.map((lecture, lectureIndex) => (
-                <LectureItem
-                  key={lecture.id}
-                  lecture={lecture}
-                  lectureIndex={lectureIndex}
-                  onEdit={() => onEditLecture(lecture)}
-                  onDelete={() => onDeleteLecture(lecture.id)}
-                />
-              ))}
-            </div>
+            <DndContext
+              sensors={lectureSensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleLectureDragEnd}
+            >
+              <SortableContext
+                items={section.lectures.map(l => l.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="space-y-2">
+                  {section.lectures.map((lecture, lectureIndex) => (
+                    <LectureItem
+                      key={lecture.id}
+                      lecture={lecture}
+                      lectureIndex={lectureIndex}
+                      onEdit={() => onEditLecture(lecture)}
+                      onDelete={() => onDeleteLecture(lecture.id)}
+                      onReorderQuizQuestions={onReorderQuizQuestions}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
           )}
         </div>
       )}

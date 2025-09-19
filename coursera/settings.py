@@ -215,3 +215,12 @@ AUTH_USER_MODEL = 'accounts.User'
 # Media files (uploads)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# File upload settings - Allow up to 2GB uploads
+FILE_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100MB - files larger than this go to temp disk storage
+DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100MB - max size for POST data in memory
+FILE_UPLOAD_PERMISSIONS = 0o644
+FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o755
+
+# Max upload size is handled by web server (nginx/apache) and not Django directly
+# For development, ensure your web server allows 2GB+ uploads
