@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Menu, X, ChevronDown, Settings, LogOut, Home, BarChart2, CreditCard, MessageSquare, BookOpen, Users, Bell, Search } from 'lucide-react';
+import { Menu, X, ChevronDown, Settings, LogOut, Home, BarChart2, CreditCard, MessageSquare, BookOpen, Users, Search } from 'lucide-react';
 import authService from '../services/authService';
 
 // Import extracted components
@@ -8,6 +8,7 @@ import CoursesManagement from './instructor/CoursesManagement';
 import StudentsView from './instructor/StudentsView';
 import AnalyticsView from './instructor/AnalyticsView';
 import EarningsView from './instructor/EarningsView';
+import NotificationDropdown from './shared/NotificationDropdown';
 import MessagesView from './instructor/MessagesView';
 import SettingsView from './instructor/SettingsView';
 
@@ -208,10 +209,7 @@ const InstructorDashboard = () => {
             </div>
             
             <div className="flex items-center space-x-4">
-              <button className="relative p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg">
-                <Bell size={20} />
-                <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-              </button>
+              <NotificationDropdown />
               
               <div className="relative" ref={profileDropdownRef}>
                 <button

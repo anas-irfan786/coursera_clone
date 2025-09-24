@@ -84,17 +84,3 @@ class Reading(BaseModel):
 
     def __str__(self):
         return f"Reading for {self.lecture.title}"
-
-class ContentDownload(BaseModel):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
-                            related_name='downloads')
-    video = models.ForeignKey(VideoContent, on_delete=models.CASCADE,
-                             related_name='download_records', null=True, blank=True)
-    reading = models.ForeignKey(Reading, on_delete=models.CASCADE,
-                               related_name='download_records', null=True, blank=True)
-
-    ip_address = models.GenericIPAddressField()
-    user_agent = models.TextField(blank=True)
-
-    class Meta:
-        db_table = 'content_downloads'

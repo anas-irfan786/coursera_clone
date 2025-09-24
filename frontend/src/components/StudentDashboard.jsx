@@ -4,8 +4,8 @@ import authService from "../services/authService";
 
 // Import extracted components
 import HomeView from './student/HomeView';
-import MyLearningView from './student/MyLearningView';
-import ExploreView from './student/ExploreView';
+import MyLearning from './student/MyLearning';
+import Explore from './student/Explore';
 import AchievementsView from './student/AchievementsView';
 import CertificatesView from './student/CertificatesView';
 import StudentMessagesView from './student/StudentMessagesView';
@@ -98,9 +98,9 @@ const StudentDashboard = () => {
       case "home":
         return <HomeView />;
       case "my-learning":
-        return <MyLearningView />;
+        return <MyLearning />;
       case "explore":
-        return <ExploreView />;
+        return <Explore />;
       case "messages":
         return <StudentMessagesView />;
       case "achievements":

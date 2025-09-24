@@ -7,17 +7,29 @@ from django.contrib.contenttypes.models import ContentType
 
 class Notification(BaseModel):
     NOTIFICATION_TYPE_CHOICES = (
+        # Course management
+        ('course_rejected', 'Course Rejected'),
+        ('course_approved', 'Course Approved'),
+        ('course_published', 'Course Published'),
+        ('course_submission', 'Course Submitted for Review'),
+
+        # Student interactions
         ('enrollment', 'New Enrollment'),
         ('course_update', 'Course Update'),
         ('assignment_due', 'Assignment Due'),
         ('quiz_available', 'Quiz Available'),
         ('certificate_earned', 'Certificate Earned'),
+
+        # Payments
         ('payment_success', 'Payment Success'),
         ('payment_failed', 'Payment Failed'),
+
+        # Communication
         ('announcement', 'Announcement'),
-        ('discussion_reply', 'Discussion Reply'),
         ('message', 'Direct Message'),
         ('review', 'New Review'),
+
+        # System
         ('system', 'System Notification'),
     )
     

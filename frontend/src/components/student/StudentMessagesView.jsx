@@ -85,12 +85,19 @@ const StudentMessagesView = () => {
   };
 
   const connectUserWebSocket = () => {
+    // Close existing connection if any
+    if (userWebsocket) {
+      console.log('Student Dashboard: Closing existing user WebSocket connection');
+      userWebsocket.close();
+      setUserWebsocket(null);
+    }
+
     const token = localStorage.getItem('access_token');
     if (!token) {
       console.error('Student Dashboard: No access token found for user WebSocket connection');
       return;
     }
-    
+
     const wsUrl = `ws://localhost:8000/ws/user/?token=${token}`;
     console.log('Student Dashboard: Connecting to user WebSocket URL:', wsUrl);
     const ws = new WebSocket(wsUrl);
@@ -105,11 +112,11 @@ const StudentMessagesView = () => {
       try {
         const data = JSON.parse(event.data);
         console.log('Student Dashboard: User WebSocket message received:', data);
-        
+
         if (data.type === 'chat_message') {
           // Always update conversation list for any message
           fetchConversations();
-          
+
           // Handle both old and new message formats
           let messageData;
           if (data.message && typeof data.message === 'object') {
@@ -130,7 +137,7 @@ const StudentMessagesView = () => {
               is_own_message: data.sender_id === currentUser?.id
             };
           }
-          
+
           // If this message is for the currently active conversation, add it to messages
           if (messageData.conversation_id === activeChat) {
             console.log('Student Dashboard: Adding message from user WebSocket to current conversation');
@@ -140,12 +147,12 @@ const StudentMessagesView = () => {
                 console.log('Student Dashboard: Message already exists, skipping duplicate');
                 return prev;
               }
-              
+
               const newMessages = [...prev, messageData];
               console.log('Student Dashboard: Updated messages from user WebSocket:', newMessages);
               return newMessages;
             });
-            
+
             // Mark message as read if it's not from the current user and the conversation is active
             if (!messageData.is_own_message) {
               markMessagesAsRead(messageData.conversation_id);
@@ -161,12 +168,15 @@ const StudentMessagesView = () => {
       console.log('Student Dashboard: User WebSocket disconnected. Code:', event.code, 'Reason:', event.reason);
       setUserWebsocket(null);
       setConnectionStatus('disconnected');
-      
-      // Attempt to reconnect after 3 seconds if not intentionally closed
-      if (event.code !== 1000) {
+
+      // Only attempt to reconnect if not intentionally closed and component is still mounted
+      if (event.code !== 1000 && event.code !== 1001) {
         setTimeout(() => {
           console.log('Student Dashboard: Attempting to reconnect user WebSocket...');
-          connectUserWebSocket();
+          // Only reconnect if we don't already have a connection
+          if (!userWebsocket || userWebsocket.readyState === WebSocket.CLOSED) {
+            connectUserWebSocket();
+          }
         }, 3000);
       }
     };

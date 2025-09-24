@@ -14,7 +14,7 @@ from enrollments.models import Enrollment, LectureProgress, LearningStreak, Cour
 from certificates.models import Certificate
 from reviews.models import CourseReview
 from accounts.models import User, StudentProfile
-from assessments.models import QuizAttempt
+from assessments.models import QuizAttempt, AssignmentSubmission, Quiz, Question, QuestionResponse, QuestionOption, Assignment
 
 class IsStudent(IsAuthenticated):
     """Permission class for students only"""
@@ -25,16 +25,22 @@ class IsStudent(IsAuthenticated):
 @permission_classes([AllowAny])
 def all_courses(request):
     """Get all available courses for students to explore"""
-    
+
     # Get filter parameters
     category = request.GET.get('category', 'all')
     level = request.GET.get('level', 'all')
     course_type = request.GET.get('type', 'all')
     search = request.GET.get('search', '')
     sort_by = request.GET.get('sort', 'popular')
-    
+
     # Base queryset - only published courses
     courses = Course.objects.filter(status='published')
+
+    # Check subscription status for enrollment permissions (but show all courses)
+    has_plus_access = False
+    if request.user.is_authenticated and request.user.user_type == 'student':
+        if hasattr(request.user, 'plus_subscription'):
+            has_plus_access = request.user.plus_subscription.can_access_plus_courses()
     
     # Apply filters
     if category != 'all':
@@ -81,6 +87,7 @@ def all_courses(request):
     
     # Serialize data
     course_data = []
+
     for course in courses[:20]:  # Limit to 20 for performance
         modules_count = course.sections.count()
         total_duration = 0
@@ -95,6 +102,30 @@ def all_courses(request):
                         pass
         total_duration = total_duration / 3600  # Convert to hours
         
+        # Determine if user can enroll in this course
+        can_enroll = True
+        enrollment_message = ""
+
+        if request.user.is_authenticated and request.user.user_type == 'student':
+            # Check if already enrolled
+            is_enrolled = getattr(course, 'is_enrolled', False)
+
+            if is_enrolled:
+                can_enroll = False
+                enrollment_message = "Already enrolled"
+            elif course.course_type == 'coursera_plus' and not has_plus_access:
+                can_enroll = False
+                enrollment_message = "Plus subscription required"
+
+        # Get progress if enrolled
+        progress_percentage = 0
+        if request.user.is_authenticated and getattr(course, 'is_enrolled', False):
+            try:
+                enrollment = Enrollment.objects.get(course=course, student=request.user)
+                progress_percentage = float(enrollment.progress_percentage)
+            except Enrollment.DoesNotExist:
+                pass
+
         course_data.append({
             'id': str(course.uuid),
             'title': course.title,
@@ -110,10 +141,386 @@ def all_courses(request):
             'modules': modules_count,
             'description': course.description[:200] + '...' if len(course.description) > 200 else course.description,
             'is_enrolled': getattr(course, 'is_enrolled', False),
-            'is_bookmarked': getattr(course, 'is_bookmarked', False)
+            'is_bookmarked': getattr(course, 'is_bookmarked', False),
+            'can_enroll': can_enroll,
+            'enrollment_message': enrollment_message,
+            'progress': progress_percentage
         })
-    
+
     return Response(course_data)
+
+@api_view(['GET'])
+@permission_classes([IsStudent])
+def course_learn_view(request, course_uuid):
+    """Get course learning interface with sections, lectures, and progress"""
+
+    course = get_object_or_404(Course, uuid=course_uuid, status='published')
+    student = request.user
+
+    # Check if student is enrolled
+    try:
+        enrollment = Enrollment.objects.get(course=course, student=student, status='active')
+    except Enrollment.DoesNotExist:
+        return Response(
+            {'error': 'You must be enrolled in this course to access learning materials'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    # Get all sections with lectures
+    sections = []
+    for section in course.sections.all().order_by('order'):
+        lectures = []
+        for lecture in section.lectures.all().order_by('order'):
+            # Get lecture progress
+            lecture_progress, created = LectureProgress.objects.get_or_create(
+                enrollment=enrollment,
+                lecture=lecture,
+                defaults={
+                    'is_completed': False,
+                    'progress_seconds': 0,
+                    'last_watched_position': 0,
+                    'watch_count': 0
+                }
+            )
+
+            lecture_data = {
+                'id': str(lecture.uuid),
+                'title': lecture.title,
+                'description': lecture.description,
+                'content_type': lecture.content_type,
+                'order': lecture.order,
+                'is_preview': lecture.is_preview,
+                'is_downloadable': lecture.is_downloadable,
+                'is_completed': lecture_progress.is_completed,
+                'progress_seconds': lecture_progress.progress_seconds,
+                'last_watched_position': lecture_progress.last_watched_position,
+                'watch_count': lecture_progress.watch_count,
+            }
+
+            # Add content-specific data
+            if lecture.content_type == 'video':
+                try:
+                    from content.models import VideoContent
+                    video_content = VideoContent.objects.get(lecture=lecture)
+                    lecture_data.update({
+                        'video_url': video_content.video_file.url if video_content.video_file else None,
+                        'duration': video_content.duration,
+                        'thumbnail': None,  # VideoContent doesn't have thumbnail field yet
+                    })
+                except VideoContent.DoesNotExist:
+                    lecture_data.update({
+                        'video_url': None,
+                        'duration': 0,
+                        'thumbnail': None,
+                    })
+
+            elif lecture.content_type == 'reading':
+                try:
+                    from content.models import Reading
+                    reading_content = Reading.objects.get(lecture=lecture)
+                    lecture_data.update({
+                        'content': reading_content.content,
+                        'estimated_reading_time': 10,  # Default estimated time in minutes
+                        'file_url': reading_content.file.url if reading_content.file else None,
+                        'is_downloadable': reading_content.is_downloadable,
+                    })
+                except Reading.DoesNotExist:
+                    lecture_data.update({
+                        'content': '',
+                        'estimated_reading_time': 0,
+                        'file_url': None,
+                        'is_downloadable': False,
+                    })
+
+            elif lecture.content_type == 'quiz':
+                try:
+                    quiz = lecture.quiz.first()  # Get the first quiz for this lecture
+                    if not quiz:
+                        raise Quiz.DoesNotExist("No quiz found for this lecture")
+                    print(f"=== QUIZ DEBUG START ===")
+                    print(f"Lecture ID: {lecture.id}, Title: {lecture.title}")
+                    print(f"Quiz ID: {quiz.id}, Title: {quiz.title}")
+                    print(f"Student: {student.email}")
+                    print(f"Quiz max_attempts: {quiz.max_attempts}")
+                    print(f"Quiz is_active: {quiz.is_active}")
+
+                    # Get student's attempts
+                    attempts = QuizAttempt.objects.filter(
+                        student=student,
+                        quiz=quiz
+                    ).order_by('-attempt_number')
+
+                    attempts_count = attempts.count()
+                    print(f"Found {attempts_count} existing attempts")
+
+                    best_score = 0
+                    if attempts.exists():
+                        best_score = max(attempt.score or 0 for attempt in attempts)
+                        print(f"Best score from attempts: {best_score}")
+                        for i, attempt in enumerate(attempts):
+                            print(f"  Attempt {i+1}: Score={attempt.score}, Passed={attempt.passed}, End time={attempt.end_time}")
+
+                    can_attempt = attempts_count < quiz.max_attempts
+                    print(f"Can attempt: {can_attempt} ({attempts_count} < {quiz.max_attempts})")
+                    print(f"=== QUIZ DEBUG END ===")
+
+                    lecture_data.update({
+                        'quiz_id': str(quiz.uuid),
+                        'max_attempts': quiz.max_attempts,
+                        'passing_score': quiz.passing_score,
+                        'attempts_taken': attempts_count,
+                        'best_score': float(best_score),
+                        'passed': best_score >= quiz.passing_score,
+                        'can_attempt': can_attempt,
+                    })
+                except Exception as e:
+                    print(f"=== QUIZ ERROR ===")
+                    print(f"Lecture ID: {lecture.id}, Title: {lecture.title}")
+                    print(f"Error: {str(e)}")
+                    print(f"Error type: {type(e).__name__}")
+                    print(f"=== QUIZ ERROR END ===")
+                    lecture_data.update({
+                        'quiz_id': None,
+                        'max_attempts': 0,
+                        'passing_score': 0,
+                        'attempts_taken': 0,
+                        'best_score': 0,
+                        'passed': False,
+                        'can_attempt': False,
+                    })
+
+            elif lecture.content_type == 'assignment':
+                try:
+                    assignment = lecture.assignment
+                    # Get student's submission
+                    try:
+                        submission = AssignmentSubmission.objects.get(
+                            assignment=assignment,
+                            student=student
+                        )
+                        submission_data = {
+                            'submitted': True,
+                            'submission_date': submission.submitted_at.isoformat(),
+                            'is_late': submission.is_late,
+                            'grade': float(submission.grade) if submission.grade else None,
+                            'feedback': submission.feedback,
+                            'graded': submission.grade is not None,
+                        }
+                    except AssignmentSubmission.DoesNotExist:
+                        submission_data = {
+                            'submitted': False,
+                            'submission_date': None,
+                            'is_late': False,
+                            'grade': None,
+                            'feedback': '',
+                            'graded': False,
+                        }
+
+                    lecture_data.update({
+                        'assignment_id': str(assignment.uuid),
+                        'due_date': assignment.due_date.isoformat() if assignment.due_date else None,
+                        'max_points': assignment.max_points,
+                        'passing_score': assignment.passing_score,
+                        'allow_late_submission': assignment.allow_late_submission,
+                        'submission': submission_data,
+                    })
+                except Exception as e:
+                    lecture_data.update({
+                        'assignment_id': None,
+                        'due_date': None,
+                        'max_points': 0,
+                        'passing_score': 0,
+                        'allow_late_submission': False,
+                        'submission': {
+                            'submitted': False,
+                            'submission_date': None,
+                            'is_late': False,
+                            'grade': None,
+                            'feedback': '',
+                            'graded': False,
+                        },
+                    })
+
+            lectures.append(lecture_data)
+
+        sections.append({
+            'id': str(section.uuid),
+            'title': section.title,
+            'description': section.description,
+            'order': section.order,
+            'is_preview': section.is_preview,
+            'lectures': lectures,
+            'completed_lectures': sum(1 for lecture in lectures if lecture['is_completed']),
+            'total_lectures': len(lectures),
+        })
+
+    # Calculate overall progress
+    total_lectures = sum(section['total_lectures'] for section in sections)
+    completed_lectures = sum(section['completed_lectures'] for section in sections)
+    progress_percentage = (completed_lectures / total_lectures * 100) if total_lectures > 0 else 0
+
+    return Response({
+        'course': {
+            'id': str(course.uuid),
+            'title': course.title,
+            'description': course.description,
+            'instructor': f"{course.instructor.first_name} {course.instructor.last_name}",
+            'thumbnail': course.thumbnail.url if course.thumbnail else None,
+            'level': course.level,
+            'category': course.category.name if course.category else 'General',
+        },
+        'enrollment': {
+            'id': str(enrollment.uuid),
+            'enrolled_date': enrollment.enrolled_date.isoformat(),
+            'progress_percentage': float(enrollment.progress_percentage),
+            'last_accessed': enrollment.last_accessed.isoformat() if enrollment.last_accessed else None,
+            'status': enrollment.status,
+        },
+        'sections': sections,
+        'progress': {
+            'total_lectures': total_lectures,
+            'completed_lectures': completed_lectures,
+            'progress_percentage': round(progress_percentage, 2),
+        }
+    })
+
+@api_view(['POST'])
+@permission_classes([IsStudent])
+def mark_lecture_complete(request, course_uuid, lecture_uuid):
+    """Mark a lecture as completed for the student"""
+
+    course = get_object_or_404(Course, uuid=course_uuid, status='published')
+    lecture = get_object_or_404(Lecture, uuid=lecture_uuid, section__course=course)
+    student = request.user
+
+    # Check if student is enrolled
+    try:
+        enrollment = Enrollment.objects.get(course=course, student=student, status='active')
+    except Enrollment.DoesNotExist:
+        return Response(
+            {'error': 'You must be enrolled in this course'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    # Get or create lecture progress
+    lecture_progress, created = LectureProgress.objects.get_or_create(
+        enrollment=enrollment,
+        lecture=lecture,
+        defaults={
+            'is_completed': False,
+            'progress_seconds': 0,
+            'last_watched_position': 0,
+            'watch_count': 0
+        }
+    )
+
+    # Mark as complete
+    lecture_progress.mark_completed()
+
+    # Update last accessed time
+    enrollment.last_accessed = timezone.now()
+    enrollment.save(update_fields=['last_accessed'])
+
+    return Response({
+        'success': True,
+        'message': 'Lecture marked as completed',
+        'progress_percentage': enrollment.progress_percentage
+    })
+
+@api_view(['POST'])
+@permission_classes([IsStudent])
+def submit_assignment(request, assignment_uuid):
+    """Submit assignment with file upload"""
+
+    from assessments.models import Assignment, AssignmentSubmission
+
+    assignment = get_object_or_404(Assignment, uuid=assignment_uuid)
+    student = request.user
+
+    # Check if student is enrolled in the course
+    try:
+        enrollment = Enrollment.objects.get(
+            course=assignment.course,
+            student=student,
+            status='active'
+        )
+    except Enrollment.DoesNotExist:
+        return Response(
+            {'error': 'You must be enrolled in this course'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    # Check if assignment is still accepting submissions
+    if assignment.due_date and timezone.now() > assignment.due_date:
+        if not assignment.allow_late_submission:
+            return Response(
+                {'error': 'Assignment deadline has passed and late submissions are not allowed'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    # Check if student already submitted
+    if AssignmentSubmission.objects.filter(assignment=assignment, student=student).exists():
+        return Response(
+            {'error': 'You have already submitted this assignment'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Get submission data
+    submission_text = request.data.get('submission_text', '')
+    submission_file = request.FILES.get('submission_file')
+
+    if not submission_text.strip() and not submission_file:
+        return Response(
+            {'error': 'Please provide either text submission or upload a file'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Check if submission is late
+    is_late = assignment.due_date and timezone.now() > assignment.due_date
+
+    # Create submission
+    submission = AssignmentSubmission.objects.create(
+        assignment=assignment,
+        student=student,
+        enrollment=enrollment,
+        submission_text=submission_text,
+        submission_file=submission_file,
+        is_late=is_late
+    )
+
+    # Auto-mark lecture as complete when assignment is submitted
+    try:
+        lecture = assignment.lecture
+        if lecture:
+            lecture_progress, created = LectureProgress.objects.get_or_create(
+                enrollment=enrollment,
+                lecture=lecture,
+                defaults={
+                    'is_completed': False,
+                    'progress_seconds': 0,
+                    'last_watched_position': 0,
+                    'watch_count': 0
+                }
+            )
+
+            if not lecture_progress.is_completed:
+                lecture_progress.mark_completed()
+
+    except Exception as e:
+        pass
+
+    return Response({
+        'success': True,
+        'message': 'Assignment submitted successfully',
+        'submission': {
+            'id': str(submission.uuid),
+            'submitted_at': submission.submitted_at.isoformat(),
+            'is_late': submission.is_late,
+            'original_filename': submission.original_filename,
+            'has_file': bool(submission.submission_file),
+            'has_text': bool(submission.submission_text.strip()),
+        }
+    })
 
 @api_view(['GET'])
 @permission_classes([IsStudent])
@@ -246,18 +653,18 @@ def enroll_course(request, course_uuid):
     
     # Check if course is free or student has subscription
     if course.course_type == 'coursera_plus':
-        # Check if student has active subscription
-        from payments.models import Subscription
-        
-        has_subscription = Subscription.objects.filter(
-            user=student,
-            status='active',
-            end_date__gte=timezone.now()
-        ).exists()
-        
-        if not has_subscription:
+        # Check if student has active Plus subscription
+        has_plus_access = False
+        if hasattr(student, 'plus_subscription'):
+            has_plus_access = student.plus_subscription.can_access_plus_courses()
+
+        if not has_plus_access:
             return Response(
-                {'error': 'Coursera Plus subscription required'},
+                {
+                    'error': 'Coursera Plus subscription required',
+                    'requires_subscription': True,
+                    'course_type': 'coursera_plus'
+                },
                 status=status.HTTP_402_PAYMENT_REQUIRED
             )
     
@@ -546,3 +953,232 @@ def weekly_progress(request):
         })
     
     return Response(week_data)
+
+@api_view(['POST'])
+@permission_classes([IsStudent])
+def attempt_quiz(request, quiz_uuid):
+    """Start or submit a quiz attempt with auto-grading"""
+
+    quiz = get_object_or_404(Quiz, uuid=quiz_uuid)
+    student = request.user
+
+    # Check if student is enrolled
+    try:
+        enrollment = Enrollment.objects.get(
+            course=quiz.course,
+            student=student,
+            status='active'
+        )
+    except Enrollment.DoesNotExist:
+        return Response(
+            {'error': 'You must be enrolled in this course'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    # Check if student can still attempt
+    existing_attempts = QuizAttempt.objects.filter(
+        student=student,
+        quiz=quiz
+    ).count()
+
+    if existing_attempts >= quiz.max_attempts:
+        return Response(
+            {'error': f'Maximum {quiz.max_attempts} attempts exceeded'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    action = request.data.get('action', 'start')  # 'start' or 'submit'
+
+    if action == 'start':
+        # Create new quiz attempt
+        attempt = QuizAttempt.objects.create(
+            student=student,
+            quiz=quiz,
+            enrollment=enrollment,
+            attempt_number=existing_attempts + 1
+        )
+
+        # Get quiz questions with options
+        questions_data = []
+        for question in quiz.questions.all().order_by('order'):
+            question_data = {
+                'id': str(question.uuid),
+                'text': question.question_text,
+                'type': question.question_type,
+                'points': question.points,
+                'order': question.order,
+                'options': []
+            }
+
+            if question.question_type in ['multiple_choice', 'true_false', 'multiple_select']:
+                for option in question.options.all().order_by('order'):
+                    question_data['options'].append({
+                        'id': str(option.uuid),
+                        'text': option.option_text,
+                        'order': option.order
+                    })
+
+            questions_data.append(question_data)
+
+        return Response({
+            'attempt_id': str(attempt.uuid),
+            'quiz': {
+                'id': str(quiz.uuid),
+                'title': quiz.title,
+                'description': quiz.description,
+                'time_limit': quiz.time_limit,
+                'passing_score': quiz.passing_score,
+                'show_answers': quiz.show_answers,
+            },
+            'questions': questions_data,
+            'start_time': attempt.start_time.isoformat(),
+        })
+
+    elif action == 'submit':
+        # Submit quiz attempt
+        attempt_id = request.data.get('attempt_id')
+        answers = request.data.get('answers', {})  # Dict of question_id: answer
+
+        try:
+            attempt = QuizAttempt.objects.get(
+                uuid=attempt_id,
+                student=student,
+                quiz=quiz,
+                end_time__isnull=True
+            )
+        except QuizAttempt.DoesNotExist:
+            return Response(
+                {'error': 'Invalid or completed attempt'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Grade the quiz
+        total_points = 0
+        earned_points = 0
+
+        for question in quiz.questions.all():
+            question_id = str(question.uuid)
+            answer = answers.get(question_id)
+
+            total_points += question.points
+            points_earned = 0
+            is_correct = False
+
+            if answer:
+                if question.question_type == 'multiple_choice':
+                    # Single correct answer
+                    selected_option_id = answer.get('selected_option')
+                    if selected_option_id:
+                        try:
+                            selected_option = QuestionOption.objects.get(uuid=selected_option_id)
+                            if selected_option.is_correct:
+                                is_correct = True
+                                points_earned = question.points
+                        except QuestionOption.DoesNotExist:
+                            pass
+
+                elif question.question_type == 'true_false':
+                    # True/False question
+                    selected_option_id = answer.get('selected_option')
+                    if selected_option_id:
+                        try:
+                            selected_option = QuestionOption.objects.get(uuid=selected_option_id)
+                            if selected_option.is_correct:
+                                is_correct = True
+                                points_earned = question.points
+                        except QuestionOption.DoesNotExist:
+                            pass
+
+                elif question.question_type == 'multiple_select':
+                    # Multiple correct answers
+                    selected_option_ids = answer.get('selected_options', [])
+                    correct_option_ids = set(
+                        str(opt.uuid) for opt in question.options.filter(is_correct=True)
+                    )
+
+                    if set(selected_option_ids) == correct_option_ids:
+                        is_correct = True
+                        points_earned = question.points
+
+                elif question.question_type == 'fill_blank':
+                    # Text answer
+                    text_answer = answer.get('text_answer', '').strip().lower()
+                    correct_answers = [ans.lower().strip() for ans in question.correct_answers]
+
+                    if text_answer in correct_answers:
+                        is_correct = True
+                        points_earned = question.points
+
+            earned_points += points_earned
+
+            # Save response
+            response = QuestionResponse.objects.create(
+                attempt=attempt,
+                question=question,
+                text_answer=answer.get('text_answer', '') if answer else '',
+                is_correct=is_correct,
+                points_earned=points_earned
+            )
+
+            # Add selected options for multiple choice questions
+            if answer and answer.get('selected_option'):
+                try:
+                    option = QuestionOption.objects.get(uuid=answer['selected_option'])
+                    response.selected_options.add(option)
+                except QuestionOption.DoesNotExist:
+                    pass
+            elif answer and answer.get('selected_options'):
+                for option_id in answer['selected_options']:
+                    try:
+                        option = QuestionOption.objects.get(uuid=option_id)
+                        response.selected_options.add(option)
+                    except QuestionOption.DoesNotExist:
+                        pass
+
+        # Calculate final score percentage
+        score_percentage = (earned_points / total_points * 100) if total_points > 0 else 0
+        passed = score_percentage >= quiz.passing_score
+
+        # Update attempt
+        attempt.end_time = timezone.now()
+        attempt.score = score_percentage
+        attempt.passed = passed
+        attempt.save()
+
+        # Auto-mark lecture as complete if quiz is passed
+        if passed and quiz.lecture:
+            try:
+                lecture_progress, created = LectureProgress.objects.get_or_create(
+                    enrollment=enrollment,
+                    lecture=quiz.lecture,
+                    defaults={
+                        'is_completed': False,
+                        'progress_seconds': 0,
+                        'last_watched_position': 0,
+                        'watch_count': 0
+                    }
+                )
+
+                if not lecture_progress.is_completed:
+                    lecture_progress.mark_completed()
+            except Exception as e:
+                pass
+
+        return Response({
+            'success': True,
+            'results': {
+                'score': float(score_percentage),
+                'earned_points': earned_points,
+                'total_points': total_points,
+                'passed': passed,
+                'passing_score': quiz.passing_score,
+                'attempt_number': attempt.attempt_number,
+                'attempts_remaining': quiz.max_attempts - attempt.attempt_number,
+            }
+        })
+
+    else:
+        return Response(
+            {'error': 'Invalid action. Use "start" or "submit"'},
+            status=status.HTTP_400_BAD_REQUEST
+        )

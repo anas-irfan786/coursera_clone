@@ -52,12 +52,19 @@ const MessagesView = () => {
   }, []);
 
   const connectUserWebSocket = () => {
+    // Close existing connection if any
+    if (userSocket) {
+      console.log('Instructor Dashboard: Closing existing user WebSocket connection');
+      userSocket.close();
+      setUserSocket(null);
+    }
+
     const token = localStorage.getItem('access_token');
     if (!token) {
       console.error('Instructor Dashboard: No access token found for user WebSocket connection');
       return;
     }
-    
+
     const wsUrl = `ws://localhost:8000/ws/user/?token=${token}`;
     console.log('Instructor Dashboard: Connecting to user WebSocket URL:', wsUrl);
     const ws = new WebSocket(wsUrl);
@@ -71,10 +78,10 @@ const MessagesView = () => {
       try {
         const data = JSON.parse(event.data);
         console.log('Instructor Dashboard: User WebSocket message received:', data);
-        
+
         if (data.type === 'chat_message') {
           fetchConversations();
-          
+
           let messageData;
           if (data.message && typeof data.message === 'object') {
             messageData = data.message;
@@ -92,7 +99,7 @@ const MessagesView = () => {
               is_own_message: data.sender_id === currentUser?.id
             };
           }
-          
+
           if (messageData.conversation_id === selectedConversation?.id) {
             console.log('Instructor Dashboard: Adding message from user WebSocket to current conversation');
             setMessages(prev => {
@@ -100,12 +107,12 @@ const MessagesView = () => {
                 console.log('Instructor Dashboard: Message already exists, skipping duplicate');
                 return prev;
               }
-              
+
               const newMessages = [...prev, messageData];
               console.log('Instructor Dashboard: Updated messages from user WebSocket:', newMessages);
               return newMessages;
             });
-            
+
             if (!messageData.is_own_message) {
               markMessagesAsRead(messageData.conversation_id);
             }
@@ -119,11 +126,15 @@ const MessagesView = () => {
     ws.onclose = (event) => {
       console.log('Instructor Dashboard: User WebSocket disconnected. Code:', event.code, 'Reason:', event.reason);
       setUserSocket(null);
-      
-      if (event.code !== 1000) {
+
+      // Only attempt to reconnect if not intentionally closed and component is still mounted
+      if (event.code !== 1000 && event.code !== 1001) {
         setTimeout(() => {
           console.log('Instructor Dashboard: Attempting to reconnect user WebSocket...');
-          connectUserWebSocket();
+          // Only reconnect if we don't already have a connection
+          if (!userSocket || userSocket.readyState === WebSocket.CLOSED) {
+            connectUserWebSocket();
+          }
         }, 3000);
       }
     };

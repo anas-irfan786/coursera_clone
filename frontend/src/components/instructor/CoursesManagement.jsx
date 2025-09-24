@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Search, Star, Edit2, Eye, EyeOff, Trash2 } from 'lucide-react';
+import { Plus, Search, Star, Edit2, Eye, EyeOff, Trash2, AlertCircle } from 'lucide-react';
 import api from '../../services/api';
 import { CreateCourseModal, EditCourseModal } from './CourseModals';
 import DeleteCourseModal from './DeleteCourseModal';
@@ -71,15 +71,37 @@ const CoursesManagement = () => {
   }, [courses, searchTerm, statusFilter, sortOption]);
 
   const handlePublishToggle = async (courseId, currentStatus) => {
-    const endpoint = currentStatus === 'published' 
-      ? `/courses/instructor/courses/${courseId}/unpublish/`
-      : `/courses/instructor/courses/${courseId}/publish/`;
-    
-    try {
-      await api.post(endpoint);
-      fetchCourses();
-    } catch (error) {
-      console.error('Error toggling publish status:', error);
+    // Allow publish request for draft and rejected courses
+    if (currentStatus === 'draft' || currentStatus === 'rejected') {
+      try {
+        const response = await api.post(`/courses/instructor/courses/${courseId}/apply_for_publish/`);
+        alert(response.data.message || 'Course submitted for review!');
+        fetchCourses();
+      } catch (error) {
+        console.error('Error applying for publish:', error);
+        if (error.response?.data?.error) {
+          alert(`Error: ${error.response.data.error}`);
+          if (error.response.data.current_weight !== undefined) {
+            alert(`Current grade weight: ${error.response.data.current_weight}%. Missing: ${error.response.data.missing_weight}%`);
+          }
+        } else {
+          alert('Failed to submit course for review. Please try again.');
+        }
+      }
+    } else if (currentStatus === 'published') {
+      // Handle unpublish
+      try {
+        const response = await api.post(`/courses/instructor/courses/${courseId}/unpublish/`);
+        alert(response.data.message || 'Course has been unpublished successfully! You can now edit the course.');
+        fetchCourses();
+      } catch (error) {
+        console.error('Error unpublishing course:', error);
+        if (error.response?.data?.error) {
+          alert(`Error: ${error.response.data.error}`);
+        } else {
+          alert('Failed to unpublish course. Please try again.');
+        }
+      }
     }
   };
 
@@ -118,11 +140,11 @@ const CoursesManagement = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h1 className="text-2xl font-bold text-gray-900">My Courses</h1>
         <button
           onClick={() => setShowCreateModal(true)}
-          className="mt-4 sm:mt-0 px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg hover:from-indigo-700 hover:to-purple-700 transition-all duration-200 flex items-center"
+          className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg hover:from-indigo-700 hover:to-purple-700 transition-all duration-200 flex items-center shrink-0"
         >
           <Plus size={20} className="mr-2" />
           Create New Course
@@ -153,6 +175,7 @@ const CoursesManagement = () => {
             <option value="published">Published</option>
             <option value="draft">Draft</option>
             <option value="pending_review">Pending Review</option>
+            <option value="rejected">Rejected</option>
             <option value="unpublished">Unpublished</option>
           </select>
           <select 
@@ -180,9 +203,15 @@ const CoursesManagement = () => {
               <span className={`absolute top-4 right-4 px-3 py-1 rounded-full text-xs font-semibold ${
                 course.status === 'published'
                   ? 'bg-green-100 text-green-800'
+                  : course.status === 'pending_review'
+                  ? 'bg-blue-100 text-blue-800'
+                  : course.status === 'rejected'
+                  ? 'bg-red-100 text-red-800'
+                  : course.status === 'draft'
+                  ? 'bg-gray-100 text-gray-800'
                   : 'bg-yellow-100 text-yellow-800'
               }`}>
-                {course.status}
+                {course.status === 'pending_review' ? 'Pending Review' : course.status}
               </span>
             </div>
             
@@ -206,22 +235,51 @@ const CoursesManagement = () => {
                   <p className="font-semibold text-green-600">${course.total_revenue}</p>
                 </div>
               </div>
-              
+
+              {/* Rejection reason display */}
+              {course.status === 'rejected' && course.rejection_reason && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
+                  <div className="flex items-start space-x-2">
+                    <AlertCircle size={16} className="text-red-600 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-red-800 mb-1">Course Rejected</p>
+                      <p className="text-sm text-red-700">{course.rejection_reason}</p>
+                      {course.rejection_date && (
+                        <p className="text-xs text-red-600 mt-1">
+                          Rejected on {new Date(course.rejection_date).toLocaleDateString()}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-2">
                 {/* Edit and Publish/Unpublish buttons */}
                 <div className="flex gap-2">
                   <button
                     onClick={() => setSelectedCourse(course)}
-                    className="flex-1 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors flex items-center justify-center"
+                    disabled={course.status === 'published'}
+                    className={`flex-1 px-3 py-2 rounded-lg transition-colors flex items-center justify-center ${
+                      course.status === 'published'
+                        ? 'bg-gray-50 text-gray-400 cursor-not-allowed'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                    title={course.status === 'published' ? 'Cannot edit published courses. Please unpublish first.' : 'Edit course'}
                   >
                     <Edit2 size={16} className="mr-1" />
                     Edit
                   </button>
                   <button
                     onClick={() => handlePublishToggle(course.id, course.status)}
+                    disabled={course.status === 'pending_review'}
                     className={`flex-1 px-3 py-2 rounded-lg transition-colors flex items-center justify-center ${
                       course.status === 'published'
                         ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                        : course.status === 'pending_review'
+                        ? 'bg-yellow-100 text-yellow-700 cursor-not-allowed'
+                        : course.status === 'rejected'
+                        ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
                         : 'bg-green-100 text-green-700 hover:bg-green-200'
                     }`}
                   >
@@ -230,10 +288,20 @@ const CoursesManagement = () => {
                         <EyeOff size={16} className="mr-1" />
                         Unpublish
                       </>
+                    ) : course.status === 'pending_review' ? (
+                      <>
+                        <Eye size={16} className="mr-1" />
+                        Under Review
+                      </>
+                    ) : course.status === 'rejected' ? (
+                      <>
+                        <Eye size={16} className="mr-1" />
+                        Resubmit for Review
+                      </>
                     ) : (
                       <>
                         <Eye size={16} className="mr-1" />
-                        Publish
+                        Request Publish
                       </>
                     )}
                   </button>
@@ -242,7 +310,13 @@ const CoursesManagement = () => {
                 {/* Delete button */}
                 <button
                   onClick={() => handleDeleteClick(course)}
-                  className="w-full px-3 py-2 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors flex items-center justify-center border border-red-200"
+                  disabled={course.status === 'published'}
+                  className={`w-full px-3 py-2 rounded-lg transition-colors flex items-center justify-center border ${
+                    course.status === 'published'
+                      ? 'bg-gray-50 text-gray-400 border-gray-200 cursor-not-allowed'
+                      : 'bg-red-50 text-red-700 hover:bg-red-100 border-red-200'
+                  }`}
+                  title={course.status === 'published' ? 'Cannot delete published courses. Please unpublish first.' : 'Delete course'}
                 >
                   <Trash2 size={16} className="mr-1" />
                   Delete Course

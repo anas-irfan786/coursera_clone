@@ -45,6 +45,7 @@ class Course(BaseModel):
         ('pending_review', 'Pending Review'),
         ('published', 'Published'),
         ('unpublished', 'Unpublished'),
+        ('rejected', 'Rejected'),
     )
     
     COURSE_TYPE_CHOICES = (
@@ -102,6 +103,12 @@ class Course(BaseModel):
     # Status
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
     is_featured = models.BooleanField(default=False)
+
+    # Rejection handling
+    rejection_reason = models.TextField(blank=True, null=True, help_text="Admin's reason for rejection")
+    rejection_date = models.DateTimeField(blank=True, null=True)
+    rejected_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                   null=True, blank=True, related_name='rejected_courses')
     
     # Statistics
     total_enrolled = models.IntegerField(default=0)

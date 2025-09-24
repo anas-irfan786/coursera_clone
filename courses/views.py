@@ -3,6 +3,7 @@ from rest_framework import generics, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import ValidationError
 from django.shortcuts import get_object_or_404
 from django.db.models import Count, Avg, Sum, Q, F, Max
 from datetime import datetime, timedelta
@@ -18,12 +19,19 @@ from .serializers import (
 from enrollments.models import Enrollment
 from payments.models import InstructorEarning
 from reviews.models import CourseReview
+from notifications.services import NotificationService
+from notifications.models import Notification
 from assessments.models import Quiz, Question, QuestionOption, Assignment
 
 class IsInstructor(IsAuthenticated):
     """Custom permission for instructors only"""
     def has_permission(self, request, view):
         return super().has_permission(request, view) and request.user.user_type == 'instructor'
+
+class IsAdmin(IsAuthenticated):
+    """Custom permission for admins only"""
+    def has_permission(self, request, view):
+        return super().has_permission(request, view) and request.user.is_admin
 
 @api_view(['GET'])
 @permission_classes([IsInstructor])
@@ -209,21 +217,85 @@ class InstructorCourseViewSet(viewsets.ModelViewSet):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'])
-    def publish(self, request, pk=None):
-        """Publish a course"""
+    def apply_for_publish(self, request, pk=None):
+        """Apply for course publishing - only if grade weights = 100%"""
         course = self.get_object()
-        
+
         # Validate course has content
         if not course.sections.exists():
             return Response(
                 {'error': 'Course must have at least one section'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
+        # Check grade weights
+        from assessments.models import Quiz, Assignment
+
+        quiz_weights = Quiz.objects.filter(course=course).aggregate(
+            total=Sum('weight')
+        )['total'] or Decimal('0')
+
+        assignment_weights = Assignment.objects.filter(course=course).aggregate(
+            total=Sum('weight')
+        )['total'] or Decimal('0')
+
+        total_weight = quiz_weights + assignment_weights
+
+        if total_weight != 100:
+            return Response(
+                {
+                    'error': 'Course total grade weight must be exactly 100%',
+                    'current_weight': float(total_weight),
+                    'missing_weight': float(100 - total_weight)
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check if course is in draft or rejected status
+        if course.status not in ['draft', 'rejected']:
+            return Response(
+                {'error': 'Only draft or rejected courses can apply for publishing'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Update course status to pending review and clear rejection data
+        course.status = 'pending_review'
+        course.rejection_reason = None
+        course.rejection_date = None
+        course.rejected_by = None
+        course.save()
+
+        # Send notification to all admin users about course submission
+        notification_result = NotificationService.create_course_submission_notification(course=course)
+
+        return Response({
+            'status': 'pending_review',
+            'message': 'Course submitted for admin review. You will be notified once it is approved.'
+        })
+
+    @action(detail=True, methods=['post'])
+    def publish(self, request, pk=None):
+        """Publish a course - admin only"""
+        course = self.get_object()
+
+        # Check if user is admin
+        if not request.user.is_admin:
+            return Response(
+                {'error': 'Only administrators can publish courses'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Validate course has content
+        if not course.sections.exists():
+            return Response(
+                {'error': 'Course must have at least one section'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         course.status = 'published'
         course.published_date = timezone.now()
         course.save()
-        
+
         return Response({'status': 'published', 'message': 'Course published successfully'})
     
     @action(detail=True, methods=['post'])
@@ -367,6 +439,58 @@ class InstructorCourseViewSet(viewsets.ModelViewSet):
             'user': request.user.email
         })
 
+    def update(self, request, *args, **kwargs):
+        """Override update to prevent editing published courses"""
+        course = self.get_object()
+
+        if course.status == 'published':
+            return Response(
+                {
+                    'error': 'Cannot edit published courses. Please unpublish the course first.',
+                    'status': course.status
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        """Override partial_update to prevent editing published courses"""
+        course = self.get_object()
+
+        if course.status == 'published':
+            return Response(
+                {
+                    'error': 'Cannot edit published courses. Please unpublish the course first.',
+                    'status': course.status
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return super().partial_update(request, *args, **kwargs)
+
+    @action(detail=True, methods=['post'])
+    def unpublish(self, request, pk=None):
+        """Unpublish a course - instructor only"""
+        course = self.get_object()
+
+        if course.status != 'published':
+            return Response(
+                {'error': 'Only published courses can be unpublished'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Update course status
+        course.status = 'draft'
+        course.published_date = None
+        course.save()
+
+        return Response({
+            'message': f'Course "{course.title}" has been unpublished',
+            'course_id': str(course.uuid),
+            'status': course.status
+        })
+
 # Section and Lecture ViewSets
 class SectionViewSet(viewsets.ModelViewSet):
     serializer_class = SectionSerializer
@@ -389,6 +513,9 @@ class SectionViewSet(viewsets.ModelViewSet):
         course_uuid = self.kwargs.get('course_uuid')
         course = get_object_or_404(Course, uuid=course_uuid, instructor=self.request.user)
 
+        if course.status == 'published':
+            raise ValidationError('Cannot add sections to published courses. Please unpublish the course first.')
+
         # Auto-assign the next available order (count-based to avoid gaps)
         current_count = Section.objects.filter(course=course).count()
         next_order = current_count + 1
@@ -397,6 +524,9 @@ class SectionViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         """Delete section and reorder all remaining sections in the course sequentially"""
+        if instance.course.status == 'published':
+            raise ValidationError('Cannot delete sections of published courses. Please unpublish the course first.')
+
         course = instance.course
 
         # Delete the instance
@@ -458,6 +588,57 @@ class SectionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+
+    def update(self, request, *args, **kwargs):
+        """Override update to prevent editing sections of published courses"""
+        section = self.get_object()
+
+        if section.course.status == 'published':
+            return Response(
+                {
+                    'error': 'Cannot edit sections of published courses. Please unpublish the course first.',
+                    'course_status': section.course.status
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        """Override partial_update to prevent editing sections of published courses"""
+        section = self.get_object()
+
+        if section.course.status == 'published':
+            return Response(
+                {
+                    'error': 'Cannot edit sections of published courses. Please unpublish the course first.',
+                    'course_status': section.course.status
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return super().partial_update(request, *args, **kwargs)
+
+    def perform_destroy(self, instance):
+        """Override destroy to prevent deleting sections of published courses"""
+        if instance.course.status == 'published':
+            raise ValidationError('Cannot delete sections of published courses. Please unpublish the course first.')
+
+        """Delete section and reorder all remaining sections in the course sequentially"""
+        course = instance.course
+
+        # Delete the instance
+        super().perform_destroy(instance)
+
+        # Reorder ALL remaining sections in the course to ensure sequential numbering (1, 2, 3, ...)
+        remaining_sections = Section.objects.filter(course=course).order_by('order')
+
+        # Update order to be sequential starting from 1
+        for i, section in enumerate(remaining_sections, 1):
+            if section.order != i:
+                section.order = i
+                section.save()
+
 class LectureViewSet(viewsets.ModelViewSet):
     serializer_class = LectureSerializer
     permission_classes = [IsInstructor]
@@ -482,6 +663,9 @@ class LectureViewSet(viewsets.ModelViewSet):
             uuid=section_uuid,
             course__instructor=self.request.user
         )
+
+        if section.course.status == 'published':
+            raise ValidationError('Cannot add lectures to published courses. Please unpublish the course first.')
 
         # Auto-assign the next available order (count-based to avoid gaps)
         current_count = Lecture.objects.filter(section=section).count()
@@ -526,6 +710,9 @@ class LectureViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         """Delete lecture and reorder all remaining lectures in the section sequentially"""
+        if instance.section.course.status == 'published':
+            raise ValidationError('Cannot delete lectures of published courses. Please unpublish the course first.')
+
         section = instance.section
 
         # Delete the instance
@@ -910,3 +1097,357 @@ class LectureViewSet(viewsets.ModelViewSet):
                 {'error': f'Failed to reorder lectures: {str(e)}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+
+    def update(self, request, *args, **kwargs):
+        """Override update to prevent editing lectures of published courses"""
+        lecture = self.get_object()
+
+        if lecture.section.course.status == 'published':
+            return Response(
+                {
+                    'error': 'Cannot edit lectures of published courses. Please unpublish the course first.',
+                    'course_status': lecture.section.course.status
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        """Override partial_update to prevent editing lectures of published courses"""
+        lecture = self.get_object()
+
+        if lecture.section.course.status == 'published':
+            return Response(
+                {
+                    'error': 'Cannot edit lectures of published courses. Please unpublish the course first.',
+                    'course_status': lecture.section.course.status
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return super().partial_update(request, *args, **kwargs)
+
+
+# Admin API endpoints
+@api_view(['GET'])
+@permission_classes([IsAdmin])
+def admin_pending_courses(request):
+    """Get all courses pending admin review"""
+    try:
+        pending_courses = Course.objects.filter(
+            status='pending_review'
+        ).select_related('instructor').order_by('-updated_at')
+
+        data = []
+        for course in pending_courses:
+            # Calculate grade weights
+            quiz_weights = Quiz.objects.filter(course=course).aggregate(
+                total=Sum('weight')
+            )['total'] or Decimal('0')
+
+            assignment_weights = Assignment.objects.filter(course=course).aggregate(
+                total=Sum('weight')
+            )['total'] or Decimal('0')
+
+            total_weight = quiz_weights + assignment_weights
+
+            data.append({
+                'id': str(course.uuid),
+                'title': course.title,
+                'instructor': {
+                    'id': str(course.instructor.uuid),
+                    'name': f"{course.instructor.first_name} {course.instructor.last_name}".strip() or course.instructor.email,
+                    'email': course.instructor.email
+                },
+                'category': course.category.name if course.category else 'Uncategorized',
+                'course_type': course.course_type,
+                'submitted_date': course.updated_at.isoformat(),
+                'sections_count': course.sections.count(),
+                'lectures_count': sum(section.lectures.count() for section in course.sections.all()),
+                'total_weight': float(total_weight),
+                'description': course.description,
+                'thumbnail': course.thumbnail.url if course.thumbnail else None,
+                'duration_hours': float(course.duration_hours) if course.duration_hours else 0
+            })
+
+        return Response(data)
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to fetch pending courses: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAdmin])
+def admin_approve_course(request, course_id):
+    """Approve a course for publishing"""
+    try:
+        course = get_object_or_404(Course, uuid=course_id, status='pending_review')
+
+        # Update course status and clear any previous rejection data
+        course.status = 'published'
+        course.published_date = timezone.now()
+        course.rejection_reason = None
+        course.rejection_date = None
+        course.rejected_by = None
+        course.save()
+
+        # Send notification to instructor about approval
+        notification_result = NotificationService.create_course_approval_notification(
+            course=course,
+            approved_by=request.user
+        )
+
+        return Response({
+            'message': f'Course "{course.title}" has been approved and published',
+            'course_id': str(course.uuid),
+            'published_date': course.published_date.isoformat()
+        })
+
+    except Course.DoesNotExist:
+        return Response(
+            {'error': 'Course not found or not pending review'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to approve course: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAdmin])
+def admin_reject_course(request, course_id):
+    """Reject a course publishing request"""
+    try:
+        course = get_object_or_404(Course, uuid=course_id, status='pending_review')
+        reason = request.data.get('reason', '')
+
+        if not reason.strip():
+            return Response(
+                {'error': 'Rejection reason is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Update course status and rejection fields
+        course.status = 'rejected'
+        course.rejection_reason = reason.strip()
+        course.rejection_date = timezone.now()
+        course.rejected_by = request.user
+        course.save()
+
+        # Send notification to instructor with rejection reason
+        notification_result = NotificationService.create_course_rejection_notification(
+            course=course,
+            rejection_reason=reason.strip(),
+            rejected_by=request.user
+        )
+
+        return Response({
+            'message': f'Course "{course.title}" has been rejected',
+            'course_id': str(course.uuid),
+            'reason': reason,
+            'rejected_by': request.user.get_full_name() or request.user.email,
+            'rejection_date': course.rejection_date.isoformat()
+        })
+
+    except Course.DoesNotExist:
+        return Response(
+            {'error': 'Course not found or not pending review'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to reject course: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([IsAdmin])
+def admin_all_courses(request):
+    """Get all courses for admin dashboard"""
+    try:
+        # Get all courses regardless of status
+        all_courses = Course.objects.select_related('instructor').order_by('-created_at')
+
+        data = []
+        for course in all_courses:
+            # Calculate grade weights
+            quiz_weights = Quiz.objects.filter(course=course).aggregate(
+                total=Sum('weight')
+            )['total'] or Decimal('0')
+
+            assignment_weights = Assignment.objects.filter(course=course).aggregate(
+                total=Sum('weight')
+            )['total'] or Decimal('0')
+
+            total_weight = quiz_weights + assignment_weights
+
+            data.append({
+                'id': str(course.uuid),
+                'title': course.title,
+                'instructor': {
+                    'id': str(course.instructor.uuid),
+                    'name': f"{course.instructor.first_name} {course.instructor.last_name}".strip() or course.instructor.email,
+                    'email': course.instructor.email
+                },
+                'category': course.category.name if course.category else 'Uncategorized',
+                'course_type': course.course_type,
+                'status': course.status,
+                'created_date': course.created_at.isoformat(),
+                'published_date': course.published_date.isoformat() if course.published_date else None,
+                'sections_count': course.sections.count(),
+                'lectures_count': sum(section.lectures.count() for section in course.sections.all()),
+                'total_weight': float(total_weight),
+                'total_enrolled': course.total_enrolled,
+                'average_rating': float(course.average_rating) if course.average_rating else 0,
+                'description': course.description,
+                'thumbnail': course.thumbnail.url if course.thumbnail else None,
+                'duration_hours': float(course.duration_hours) if course.duration_hours else 0
+            })
+
+        return Response(data)
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to fetch all courses: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([IsAdmin])
+def admin_all_users(request):
+    """Get all users for admin dashboard"""
+    try:
+        from accounts.models import User
+
+        users = User.objects.all().order_by('-date_joined')
+        data = []
+
+        for user in users:
+            try:
+                # Basic user data
+                user_data = {
+                    'id': str(user.uuid),
+                    'name': f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email.split('@')[0],
+                    'email': user.email,
+                    'user_type': user.user_type,
+                    'join_date': user.date_joined.isoformat(),
+                    'last_login': user.last_login.isoformat() if user.last_login else None,
+                    'is_active': user.is_active,
+                    'status': 'active' if user.is_active else 'inactive',
+                    'phone_number': getattr(user, 'phone_number', '') or '',
+                    'email_verified': getattr(user, 'email_verified', False),
+                    'avatar': f'https://ui-avatars.com/api/?name={user.first_name or "User"}&background=6366F1&color=fff'
+                }
+
+                # Add user-type specific data
+                if user.user_type == 'student':
+                    from enrollments.models import Enrollment
+                    enrollments = Enrollment.objects.filter(student=user)
+                    user_data.update({
+                        'courses_enrolled': enrollments.count(),
+                        'completed_courses': enrollments.filter(status='completed').count(),
+                        'active_courses': enrollments.filter(status='active').count(),
+                    })
+
+                elif user.user_type == 'instructor':
+                    from courses.models import Course
+                    from enrollments.models import Enrollment
+                    instructor_courses = Course.objects.filter(instructor=user)
+                    user_data.update({
+                        'courses_created': instructor_courses.count(),
+                        'published_courses': instructor_courses.filter(status='published').count(),
+                        'draft_courses': instructor_courses.filter(status='draft').count(),
+                        'students_taught': Enrollment.objects.filter(course__instructor=user).values('student').distinct().count(),
+                    })
+
+                else:  # admin users
+                    user_data.update({
+                        'is_superuser': getattr(user, 'is_superuser', False),
+                        'is_admin': getattr(user, 'is_admin', False),
+                    })
+
+                data.append(user_data)
+
+            except Exception as user_error:
+                # Skip users that cause errors but continue processing others
+                continue
+
+        return Response(data)
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to get users: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+# Notification API endpoints
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_user_notifications(request):
+    """Get notifications for the current user"""
+    try:
+        notifications = NotificationService.get_user_notifications(
+            user=request.user,
+            limit=int(request.GET.get('limit', 20)),
+            include_read=request.GET.get('include_read', 'true').lower() == 'true'
+        )
+
+        data = []
+        for notification in notifications:
+            data.append({
+                'id': notification.id,
+                'type': notification.notification_type,
+                'title': notification.title,
+                'message': notification.message,
+                'is_read': notification.is_read,
+                'created_at': notification.created_at.isoformat(),
+                'read_at': notification.read_at.isoformat() if notification.read_at else None,
+                'action_url': notification.action_url,
+            })
+
+        return Response(data)
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to get notifications: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_unread_notification_count(request):
+    """Get count of unread notifications for the current user"""
+    try:
+        count = NotificationService.get_unread_count(request.user)
+        return Response({'unread_count': count})
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to get notification count: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mark_notification_read(request, notification_id):
+    """Mark a notification as read"""
+    try:
+        notification = NotificationService.mark_as_read(notification_id, request.user)
+        if notification:
+            return Response({'message': 'Notification marked as read'})
+        else:
+            return Response(
+                {'error': 'Notification not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to mark notification as read: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

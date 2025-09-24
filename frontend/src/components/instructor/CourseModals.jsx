@@ -166,8 +166,8 @@ export const CreateCourseModal = ({ onClose, onSave }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto m-4">
         <div className="sticky top-0 bg-white border-b p-6 flex items-center justify-between">
           <h2 className="text-xl font-bold text-gray-900">Create New Course</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
@@ -389,7 +389,6 @@ export const EditCourseModal = ({ course, onClose, onSave }) => {
   const [loading, setLoading] = useState(false);
   const [fetchingDetails, setFetchingDetails] = useState(false);
 
-
   const [courseData, setCourseData] = useState({
     title: course?.title || '',
     subtitle: '',
@@ -582,8 +581,8 @@ export const EditCourseModal = ({ course, onClose, onSave }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto m-4">
         <div className="sticky top-0 bg-white border-b">
           <div className="p-6 flex items-center justify-between">
             <h2 className="text-xl font-bold text-gray-900">Edit Course: {course.title}</h2>
@@ -755,11 +754,11 @@ export const EditCourseModal = ({ course, onClose, onSave }) => {
               </div>
             </div>
           )}
-          
+
           {!fetchingDetails && activeTab === 'curriculum' && (
             <CurriculumTab courseId={course.id} />
           )}
-          
+
           {!fetchingDetails && activeTab === 'pricing' && (
             <div className="space-y-6">
               <div>
@@ -777,7 +776,7 @@ export const EditCourseModal = ({ course, onClose, onSave }) => {
                 <p className="text-sm text-gray-500 mt-2">
                   {courseData.course_type === 'free'
                     ? 'Free courses are available to all users but don\'t generate instructor earnings.'
-                    : 'Coursera Plus courses are included in the subscription and generate earnings based on student engagement and completion rates.'
+                    : 'Coursera Plus courses generate earnings based on student engagement and completion rates.'
                   }
                 </p>
               </div>

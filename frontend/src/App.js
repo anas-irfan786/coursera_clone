@@ -6,6 +6,24 @@ import InstructorDashboard from './components/InstructorDashboard'; // ← Corre
 import authService from './services/authService';
 import StudentDashboard from './components/StudentDashboard';
 import AdminDashboard from './components/AdminDashboard';
+import CourseLearning from './components/student/CourseLearning';
+
+// Protected route component for admin access
+const AdminProtectedRoute = ({ children }) => {
+  const user = authService.getCurrentUser();
+  const isAuthenticated = authService.isAuthenticated();
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" />;
+  }
+
+  if (user?.user_type !== 'admin') {
+    console.warn('Non-admin user attempted to access admin dashboard');
+    return <Navigate to={user?.user_type === 'instructor' ? '/instructor/dashboard' : '/student/dashboard'} />;
+  }
+
+  return children;
+};
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -19,10 +37,19 @@ function App() {
   const checkAuth = () => {
     const isAuth = authService.isAuthenticated();
     setIsAuthenticated(isAuth);
-    
+
     if (isAuth) {
       const user = authService.getCurrentUser();
       setUserType(user?.user_type);
+
+      // Additional security: if user is not admin but trying to access admin routes
+      const currentPath = window.location.pathname;
+      if ((currentPath.includes('/admin') || currentPath.includes('/admindashboard')) &&
+          user?.user_type !== 'admin') {
+        console.warn('Unauthorized access attempt to admin routes');
+        window.location.href = user?.user_type === 'instructor' ? '/instructor/dashboard' : '/student/dashboard';
+        return;
+      }
     }
     setLoading(false);
   };
@@ -38,22 +65,36 @@ function App() {
   return (
     <Router>
       <Routes>
-        <Route 
-          path="/login" 
+        <Route
+          path="/login"
           element={
-            isAuthenticated ? 
-              <Navigate to = {userType === 'instructor' ? '/instructor/dashboard' : '/student/dashboard'} /> : 
+            isAuthenticated ?
+              <Navigate to = {
+                userType === 'instructor' ? '/instructor/dashboard' :
+                userType === 'admin' ? '/admin/dashboard' :
+                '/student/dashboard'
+              } /> :
               <CourseraAuth />
-          } 
+          }
         />
 
-        <Route 
-          path="/admindashboard" 
+        <Route
+          path="/admin/dashboard"
           element={
-            // isAuthenticated && userType === 'admin' ? 
-              <AdminDashboard /> // : 
-              // <Navigate to="/login" />
-          } 
+            <AdminProtectedRoute>
+              <AdminDashboard />
+            </AdminProtectedRoute>
+          }
+        />
+
+        {/* Legacy route compatibility - with proper auth check */}
+        <Route
+          path="/admindashboard"
+          element={
+            <AdminProtectedRoute>
+              <Navigate to="/admin/dashboard" />
+            </AdminProtectedRoute>
+          }
         />
         
         <Route 
@@ -65,24 +106,35 @@ function App() {
           } 
         />
         
-        <Route 
-          path="/student/dashboard" 
+        <Route
+          path="/student/dashboard"
           element={
-            isAuthenticated && userType === 'student' ? 
-              <StudentDashboard /> : 
+            isAuthenticated && userType === 'student' ?
+              <StudentDashboard /> :
               <Navigate to="/login" />
-          } 
+          }
+        />
+
+        <Route
+          path="/courses/:courseId/learn"
+          element={
+            isAuthenticated && userType === 'student' ?
+              <CourseLearning /> :
+              <Navigate to="/login" />
+          }
         />
         
-        <Route 
-          path="/" 
+        <Route
+          path="/"
           element={
             <Navigate to={
-              isAuthenticated ? 
-                (userType === 'instructor' ? '/instructor/dashboard' : '/student/dashboard') : 
+              isAuthenticated ?
+                (userType === 'instructor' ? '/instructor/dashboard' :
+                 userType === 'admin' ? '/admin/dashboard' :
+                 '/student/dashboard') :
                 '/login'
             } />
-          } 
+          }
         />
       </Routes>
     </Router>

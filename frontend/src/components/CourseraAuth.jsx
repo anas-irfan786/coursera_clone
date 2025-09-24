@@ -109,7 +109,11 @@ const CourseraAuth = () => {
     if (!isLogin && response.message) {
       alert(response.message);
     } else {
-      alert(`Welcome ${response.user.user_type === 'instructor' ? 'Instructor' : 'Student'}!`);
+      alert(`Welcome ${
+        response.user.user_type === 'instructor' ? 'Instructor' :
+        response.user.user_type === 'admin' ? 'Admin' :
+        'Student'
+      }!`);
     }
     
     // Redirect based on user type after successful login
