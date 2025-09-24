@@ -237,12 +237,6 @@ def course_learn_view(request, course_uuid):
                     quiz = lecture.quiz.first()  # Get the first quiz for this lecture
                     if not quiz:
                         raise Quiz.DoesNotExist("No quiz found for this lecture")
-                    print(f"=== QUIZ DEBUG START ===")
-                    print(f"Lecture ID: {lecture.id}, Title: {lecture.title}")
-                    print(f"Quiz ID: {quiz.id}, Title: {quiz.title}")
-                    print(f"Student: {student.email}")
-                    print(f"Quiz max_attempts: {quiz.max_attempts}")
-                    print(f"Quiz is_active: {quiz.is_active}")
 
                     # Get student's attempts
                     attempts = QuizAttempt.objects.filter(
@@ -251,18 +245,11 @@ def course_learn_view(request, course_uuid):
                     ).order_by('-attempt_number')
 
                     attempts_count = attempts.count()
-                    print(f"Found {attempts_count} existing attempts")
-
                     best_score = 0
                     if attempts.exists():
                         best_score = max(attempt.score or 0 for attempt in attempts)
-                        print(f"Best score from attempts: {best_score}")
-                        for i, attempt in enumerate(attempts):
-                            print(f"  Attempt {i+1}: Score={attempt.score}, Passed={attempt.passed}, End time={attempt.end_time}")
 
                     can_attempt = attempts_count < quiz.max_attempts
-                    print(f"Can attempt: {can_attempt} ({attempts_count} < {quiz.max_attempts})")
-                    print(f"=== QUIZ DEBUG END ===")
 
                     lecture_data.update({
                         'quiz_id': str(quiz.uuid),
@@ -274,11 +261,6 @@ def course_learn_view(request, course_uuid):
                         'can_attempt': can_attempt,
                     })
                 except Exception as e:
-                    print(f"=== QUIZ ERROR ===")
-                    print(f"Lecture ID: {lecture.id}, Title: {lecture.title}")
-                    print(f"Error: {str(e)}")
-                    print(f"Error type: {type(e).__name__}")
-                    print(f"=== QUIZ ERROR END ===")
                     lecture_data.update({
                         'quiz_id': None,
                         'max_attempts': 0,
@@ -975,19 +957,20 @@ def attempt_quiz(request, quiz_uuid):
             status=status.HTTP_403_FORBIDDEN
         )
 
-    # Check if student can still attempt
-    existing_attempts = QuizAttempt.objects.filter(
-        student=student,
-        quiz=quiz
-    ).count()
-
-    if existing_attempts >= quiz.max_attempts:
-        return Response(
-            {'error': f'Maximum {quiz.max_attempts} attempts exceeded'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
     action = request.data.get('action', 'start')  # 'start' or 'submit'
+
+    # Check if student can still attempt (only for starting new attempts)
+    if action == 'start':
+        existing_attempts = QuizAttempt.objects.filter(
+            student=student,
+            quiz=quiz
+        ).count()
+
+        if existing_attempts >= quiz.max_attempts:
+            return Response(
+                {'error': f'Maximum {quiz.max_attempts} attempts exceeded'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
     if action == 'start':
         # Create new quiz attempt
@@ -1145,8 +1128,8 @@ def attempt_quiz(request, quiz_uuid):
         attempt.passed = passed
         attempt.save()
 
-        # Auto-mark lecture as complete if quiz is passed
-        if passed and quiz.lecture:
+        # Auto-mark lecture as complete on FIRST attempt completion (regardless of pass/fail)
+        if quiz.lecture:
             try:
                 lecture_progress, created = LectureProgress.objects.get_or_create(
                     enrollment=enrollment,
@@ -1159,18 +1142,35 @@ def attempt_quiz(request, quiz_uuid):
                     }
                 )
 
-                if not lecture_progress.is_completed:
+                # Mark complete on first attempt completion
+                if not lecture_progress.is_completed and attempt.attempt_number == 1:
                     lecture_progress.mark_completed()
             except Exception as e:
                 pass
 
+        # Calculate best score and overall pass status across all attempts
+        all_attempts = QuizAttempt.objects.filter(
+            student=student,
+            quiz=quiz,
+            end_time__isnull=False  # Only completed attempts
+        ).order_by('-score')
+
+        best_score = score_percentage  # Current attempt score as fallback
+        overall_passed = passed  # Current attempt passed status as fallback
+
+        if all_attempts.exists():
+            best_score = max(attempt.score or 0 for attempt in all_attempts)
+            overall_passed = any(attempt.passed for attempt in all_attempts)
+
         return Response({
             'success': True,
             'results': {
-                'score': float(score_percentage),
+                'score': float(score_percentage),  # Current attempt score
+                'best_score': float(best_score),  # Best score across all attempts
                 'earned_points': earned_points,
                 'total_points': total_points,
-                'passed': passed,
+                'passed': overall_passed,  # Overall pass status (true if passed any attempt)
+                'current_attempt_passed': passed,  # Current attempt pass status
                 'passing_score': quiz.passing_score,
                 'attempt_number': attempt.attempt_number,
                 'attempts_remaining': quiz.max_attempts - attempt.attempt_number,

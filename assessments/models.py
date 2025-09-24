@@ -115,11 +115,11 @@ class QuizAttempt(BaseModel):
         except Enrollment.DoesNotExist:
             raise ValidationError("Must be enrolled in course to attempt quiz")
 
-        # Check max attempts
+        # Check max attempts (exclude current instance if updating)
         existing_attempts = QuizAttempt.objects.filter(
             student=self.student,
             quiz=self.quiz
-        ).count()
+        ).exclude(pk=self.pk).count()
 
         if existing_attempts >= self.quiz.max_attempts:
             raise ValidationError(f"Maximum {self.quiz.max_attempts} attempts exceeded")

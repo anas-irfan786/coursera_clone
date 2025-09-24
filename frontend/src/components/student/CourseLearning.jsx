@@ -164,6 +164,13 @@ const CourseLearning = () => {
   const [selectedLecture, setSelectedLecture] = useState(null);
   const [expandedSections, setExpandedSections] = useState({});
 
+  // Quiz-related state
+  const [quizMode, setQuizMode] = useState(null); // null, 'taking', 'results'
+  const [currentQuiz, setCurrentQuiz] = useState(null);
+  const [quizAnswers, setQuizAnswers] = useState({});
+  const [quizResults, setQuizResults] = useState(null);
+  const [quizLoading, setQuizLoading] = useState(false);
+
   useEffect(() => {
     fetchCourseData();
   }, [courseId]);
@@ -180,10 +187,32 @@ const CourseLearning = () => {
       });
       setExpandedSections(expanded);
 
-      // Select first incomplete lecture or first lecture
-      const firstIncomplete = findFirstIncompleteLecture(response.data.sections);
-      if (firstIncomplete) {
-        setSelectedLecture(firstIncomplete);
+      // Try to restore previously selected lecture from localStorage
+      const savedLectureId = localStorage.getItem(`selectedLecture_${courseId}`);
+      let lectureToSelect = null;
+
+      if (savedLectureId) {
+        // Find the saved lecture in the course data
+        for (const section of response.data.sections) {
+          const savedLecture = section.lectures.find(l => l.id === savedLectureId);
+          if (savedLecture) {
+            lectureToSelect = savedLecture;
+            break;
+          }
+        }
+      }
+
+      // If no saved lecture found, select first incomplete lecture or first lecture
+      if (!lectureToSelect) {
+        lectureToSelect = findFirstIncompleteLecture(response.data.sections);
+      }
+
+      if (lectureToSelect) {
+        setSelectedLecture(lectureToSelect);
+        // Save to localStorage if it's a new selection (not restored from localStorage)
+        if (!savedLectureId) {
+          localStorage.setItem(`selectedLecture_${courseId}`, lectureToSelect.id);
+        }
       }
     } catch (error) {
       console.error('Error fetching course data:', error);
@@ -211,6 +240,28 @@ const CourseLearning = () => {
     return null;
   };
 
+  const refreshCourseDataOnly = async () => {
+    try {
+      const response = await api.get(`/courses/${courseId}/learn/`);
+      setCourseData(response.data);
+
+      // Update the selected lecture with fresh data but don't change selection
+      if (selectedLecture) {
+        for (const section of response.data.sections) {
+          const updatedLecture = section.lectures.find(l => l.id === selectedLecture.id);
+          if (updatedLecture) {
+            setSelectedLecture(updatedLecture);
+            // Ensure localStorage is updated
+            localStorage.setItem(`selectedLecture_${courseId}`, updatedLecture.id);
+            break;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error refreshing course data:', error);
+    }
+  };
+
   const toggleSection = (sectionId) => {
     setExpandedSections(prev => ({
       ...prev,
@@ -219,7 +270,28 @@ const CourseLearning = () => {
   };
 
   const handleLectureSelect = (lecture) => {
+    // Check if user is in the middle of taking a quiz
+    if (quizMode === 'taking') {
+      const confirmSwitch = window.confirm(
+        'You are currently taking a quiz. Switching lectures will end your current quiz attempt. Are you sure you want to continue?'
+      );
+      if (!confirmSwitch) {
+        return; // Don't switch lectures
+      }
+    }
+
+    // Reset quiz state when switching lectures
+    if (quizMode !== null) {
+      setQuizMode(null);
+      setCurrentQuiz(null);
+      setQuizAnswers({});
+      setQuizResults(null);
+      setQuizLoading(false);
+    }
+
     setSelectedLecture(lecture);
+    // Save selected lecture to localStorage
+    localStorage.setItem(`selectedLecture_${courseId}`, lecture.id);
     // Update last accessed time
     updateLastAccessed();
   };
@@ -242,6 +314,64 @@ const CourseLearning = () => {
       console.error('Error marking lecture complete:', error);
       alert('Failed to mark lecture as complete. Please try again.');
     }
+  };
+
+  // Quiz Functions
+  const startQuiz = async (quizId) => {
+    setQuizLoading(true);
+    try {
+      const response = await api.post(`/courses/quizzes/${quizId}/attempt/`, {
+        action: 'start'
+      });
+
+      setCurrentQuiz(response.data);
+      setQuizAnswers({});
+      setQuizMode('taking');
+      setQuizResults(null);
+    } catch (error) {
+      console.error('Error starting quiz:', error);
+      alert('Failed to start quiz. Please try again.');
+    } finally {
+      setQuizLoading(false);
+    }
+  };
+
+  const submitQuiz = async () => {
+    if (!currentQuiz) return;
+
+    setQuizLoading(true);
+    try {
+      const response = await api.post(`/courses/quizzes/${currentQuiz.quiz.id}/attempt/`, {
+        action: 'submit',
+        attempt_id: currentQuiz.attempt_id,
+        answers: quizAnswers
+      });
+
+      setQuizResults(response.data.results);
+      setQuizMode('results');
+
+      // Refresh course data to update progress without changing lecture selection
+      await refreshCourseDataOnly();
+    } catch (error) {
+      console.error('Error submitting quiz:', error);
+      alert('Failed to submit quiz. Please try again.');
+    } finally {
+      setQuizLoading(false);
+    }
+  };
+
+  const handleQuizAnswer = (questionId, answer) => {
+    setQuizAnswers(prev => ({
+      ...prev,
+      [questionId]: answer
+    }));
+  };
+
+  const exitQuiz = () => {
+    setQuizMode(null);
+    setCurrentQuiz(null);
+    setQuizAnswers({});
+    setQuizResults(null);
   };
 
   const getLectureIcon = (contentType) => {
@@ -323,6 +453,7 @@ const CourseLearning = () => {
               {lecture.video_url ? (
                 <div className="aspect-video bg-black rounded-lg overflow-hidden">
                   <video
+                    key={lecture.id} // Force re-mount when switching videos
                     controls
                     className="w-full h-full"
                     poster={lecture.thumbnail}
@@ -358,6 +489,7 @@ const CourseLearning = () => {
                   Estimated reading time: {lecture.estimated_reading_time} minutes
                 </div>
                 <div
+                  key={lecture.id} // Force re-render when switching reading content
                   className="text-gray-800 leading-relaxed"
                   dangerouslySetInnerHTML={{ __html: lecture.content || '<p>Reading content not available</p>' }}
                 />
@@ -367,42 +499,217 @@ const CourseLearning = () => {
 
           {lecture.content_type === 'quiz' && (
             <div className="p-6">
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-                <h3 className="font-medium text-blue-900 mb-2">Quiz Information</h3>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <span className="text-blue-700">Attempts:</span> {lecture.attempts_taken}/{lecture.max_attempts}
+              {/* Quiz Overview */}
+              {quizMode === null && (
+                <>
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                    <h3 className="font-medium text-blue-900 mb-2">Quiz Information</h3>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <span className="text-blue-700">Attempts:</span> {lecture.attempts_taken}/{lecture.max_attempts}
+                      </div>
+                      <div>
+                        <span className="text-blue-700">Passing Score:</span> {lecture.passing_score}%
+                      </div>
+                      <div>
+                        <span className="text-blue-700">Best Score:</span> {lecture.best_score}%
+                      </div>
+                      <div>
+                        <span className="text-blue-700">Status:</span>
+                        <span className={`ml-1 ${lecture.passed ? 'text-green-600' : 'text-red-600'}`}>
+                          {lecture.passed ? 'Passed' : 'Not Passed'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-blue-700">Passing Score:</span> {lecture.passing_score}%
+
+                  <div className="text-center">
+                    <button
+                      onClick={() => startQuiz(lecture.quiz_id)}
+                      disabled={!lecture.can_attempt || quizLoading}
+                      className={`px-6 py-3 rounded-lg font-medium ${
+                        lecture.can_attempt && !quizLoading
+                          ? 'bg-blue-600 text-white hover:bg-blue-700'
+                          : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      }`}
+                    >
+                      {quizLoading ? 'Loading...' : lecture.attempts_taken === 0 ? 'Start Quiz' : 'Retake Quiz'}
+                    </button>
+                    {!lecture.can_attempt && lecture.attempts_taken >= lecture.max_attempts && (
+                      <p className="mt-2 text-sm text-red-600">Maximum attempts reached</p>
+                    )}
                   </div>
-                  <div>
-                    <span className="text-blue-700">Best Score:</span> {lecture.best_score}%
+                </>
+              )}
+
+              {/* Quiz Taking Interface */}
+              {quizMode === 'taking' && currentQuiz && (
+                <div className="max-w-4xl mx-auto">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <h3 className="font-medium text-blue-900">{currentQuiz.quiz.title}</h3>
+                        <p className="text-sm text-blue-700 mt-1">{currentQuiz.quiz.description}</p>
+                      </div>
+                      <div className="text-right text-sm text-blue-700">
+                        <div>Passing Score: {currentQuiz.quiz.passing_score}%</div>
+                        {currentQuiz.quiz.time_limit && (
+                          <div>Time Limit: {currentQuiz.quiz.time_limit} minutes</div>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-blue-700">Status:</span>
-                    <span className={`ml-1 ${lecture.passed ? 'text-green-600' : 'text-red-600'}`}>
-                      {lecture.passed ? 'Passed' : 'Not Passed'}
-                    </span>
+
+                  <div className="space-y-6">
+                    {currentQuiz.questions.map((question, index) => (
+                      <div key={question.id} className="bg-white border border-gray-200 rounded-lg p-6">
+                        <div className="flex items-start space-x-3 mb-4">
+                          <span className="flex-shrink-0 w-8 h-8 bg-blue-100 text-blue-800 rounded-full flex items-center justify-center text-sm font-medium">
+                            {index + 1}
+                          </span>
+                          <div className="flex-1">
+                            <h4 className="text-lg font-medium text-gray-900 mb-2">{question.text}</h4>
+                            <div className="text-sm text-gray-500 mb-4">
+                              {question.points} point{question.points !== 1 ? 's' : ''} • {question.type.replace('_', ' ').toUpperCase()}
+                            </div>
+
+                            {/* Multiple Choice / True False */}
+                            {(question.type === 'multiple_choice' || question.type === 'true_false') && (
+                              <div className="space-y-2">
+                                {question.options.map((option) => (
+                                  <label key={option.id} className="flex items-center space-x-3 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
+                                    <input
+                                      type="radio"
+                                      name={`question-${question.id}`}
+                                      value={option.id}
+                                      onChange={(e) => handleQuizAnswer(question.id, { selected_option: e.target.value })}
+                                      className="w-4 h-4 text-blue-600"
+                                    />
+                                    <span className="text-gray-900">{option.text}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Multiple Select */}
+                            {question.type === 'multiple_select' && (
+                              <div className="space-y-2">
+                                {question.options.map((option) => (
+                                  <label key={option.id} className="flex items-center space-x-3 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      value={option.id}
+                                      onChange={(e) => {
+                                        const currentAnswers = quizAnswers[question.id]?.selected_options || [];
+                                        const newAnswers = e.target.checked
+                                          ? [...currentAnswers, option.id]
+                                          : currentAnswers.filter(id => id !== option.id);
+                                        handleQuizAnswer(question.id, { selected_options: newAnswers });
+                                      }}
+                                      className="w-4 h-4 text-blue-600 rounded"
+                                    />
+                                    <span className="text-gray-900">{option.text}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Fill in the Blank */}
+                            {question.type === 'fill_blank' && (
+                              <input
+                                type="text"
+                                placeholder="Enter your answer..."
+                                onChange={(e) => handleQuizAnswer(question.id, { text_answer: e.target.value })}
+                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex justify-between items-center mt-8 p-6 bg-gray-50 rounded-lg">
+                    <button
+                      onClick={exitQuiz}
+                      className="px-4 py-2 text-gray-600 hover:text-gray-800 font-medium"
+                    >
+                      Exit Quiz
+                    </button>
+                    <button
+                      onClick={submitQuiz}
+                      disabled={quizLoading}
+                      className={`px-6 py-3 rounded-lg font-medium ${
+                        quizLoading
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-green-600 text-white hover:bg-green-700'
+                      }`}
+                    >
+                      {quizLoading ? 'Submitting...' : 'Submit Quiz'}
+                    </button>
                   </div>
                 </div>
-              </div>
+              )}
 
-              <div className="text-center">
-                <button
-                  disabled={!lecture.can_attempt}
-                  className={`px-6 py-3 rounded-lg font-medium ${
-                    lecture.can_attempt
-                      ? 'bg-blue-600 text-white hover:bg-blue-700'
-                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  }`}
-                >
-                  {lecture.attempts_taken === 0 ? 'Start Quiz' : 'Retake Quiz'}
-                </button>
-                {!lecture.can_attempt && lecture.attempts_taken >= lecture.max_attempts && (
-                  <p className="mt-2 text-sm text-red-600">Maximum attempts reached</p>
-                )}
-              </div>
+              {/* Quiz Results */}
+              {quizMode === 'results' && quizResults && (
+                <div className="max-w-2xl mx-auto">
+                  <div className={`border-2 rounded-lg p-6 mb-6 ${
+                    quizResults.passed
+                      ? 'bg-green-50 border-green-200'
+                      : 'bg-red-50 border-red-200'
+                  }`}>
+                    <div className="text-center">
+                      <div className={`text-6xl font-bold mb-2 ${
+                        quizResults.passed ? 'text-green-600' : 'text-red-600'
+                      }`}>
+                        {Math.round(quizResults.score)}%
+                      </div>
+                      <h3 className={`text-xl font-semibold mb-2 ${
+                        quizResults.passed ? 'text-green-900' : 'text-red-900'
+                      }`}>
+                        {quizResults.passed ? 'Quiz Passed!' : quizResults.current_attempt_passed ? 'Great! But You Already Passed Before' : 'Quiz Not Passed'}
+                      </h3>
+
+                      {/* Show best score if different from current */}
+                      {quizResults.best_score !== quizResults.score && (
+                        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                          <div className="text-sm text-blue-700">
+                            <span className="font-medium">Your Best Score:</span> {Math.round(quizResults.best_score)}%
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-2 gap-4 text-sm mt-4">
+                        <div>
+                          <span className="font-medium">This Attempt:</span> {quizResults.earned_points}/{quizResults.total_points} points
+                        </div>
+                        <div>
+                          <span className="font-medium">Passing Score:</span> {quizResults.passing_score}%
+                        </div>
+                        <div>
+                          <span className="font-medium">Attempt:</span> {quizResults.attempt_number}/{quizResults.attempt_number + quizResults.attempts_remaining}
+                        </div>
+                        <div>
+                          <span className="font-medium">Status:</span>
+                          <span className={`ml-1 font-semibold ${quizResults.passed ? 'text-green-600' : 'text-red-600'}`}>
+                            {quizResults.passed ? 'PASSED' : 'NOT PASSED'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-center">
+                    <button
+                      onClick={exitQuiz}
+                      className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+                    >
+                      Continue Learning
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -453,6 +760,7 @@ const CourseLearning = () => {
                 </div>
               ) : (
                 <AssignmentSubmissionForm
+                  key={lecture.assignment_id} // Force re-mount when switching assignments
                   assignment={lecture}
                   onSubmissionSuccess={fetchCourseData}
                 />
