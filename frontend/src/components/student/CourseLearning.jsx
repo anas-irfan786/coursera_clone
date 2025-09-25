@@ -6,14 +6,32 @@ import {
   FileText,
   Award,
   CheckCircle,
-  Clock,
   ArrowLeft,
   ChevronDown,
   ChevronRight,
   Download,
-  MoreVertical
+  Menu,
+  X,
+  RefreshCw
 } from 'lucide-react';
 import api from '../../services/api';
+
+// Helper function to extract YouTube video ID
+const getYouTubeVideoId = (url) => {
+  if (!url) return null;
+
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+    /youtube\.com\/v\/([^&\n?#]+)/
+  ];
+
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+
+  return null;
+};
 
 // Assignment Submission Form Component
 const AssignmentSubmissionForm = ({ assignment, onSubmissionSuccess }) => {
@@ -51,6 +69,8 @@ const AssignmentSubmissionForm = ({ assignment, onSubmissionSuccess }) => {
       return;
     }
 
+    console.log('Submitting assignment:', assignment); // Debug log
+
     setSubmitting(true);
     try {
       const formData = new FormData();
@@ -59,7 +79,9 @@ const AssignmentSubmissionForm = ({ assignment, onSubmissionSuccess }) => {
         formData.append('submission_file', submissionFile);
       }
 
-      await api.post(`/assignments/${assignment.assignment_id}/submit/`, formData, {
+      console.log('Submitting to:', `/courses/assignments/${assignment.assignment_id}/submit/`); // Debug log
+
+      await api.post(`/courses/assignments/${assignment.assignment_id}/submit/`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -71,6 +93,7 @@ const AssignmentSubmissionForm = ({ assignment, onSubmissionSuccess }) => {
       }
     } catch (error) {
       console.error('Assignment submission error:', error);
+      console.error('Error response:', error.response); // More detailed error logging
       alert(error.response?.data?.error || 'Failed to submit assignment. Please try again.');
     } finally {
       setSubmitting(false);
@@ -161,7 +184,9 @@ const CourseLearning = () => {
   const navigate = useNavigate();
   const [courseData, setCourseData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [selectedLecture, setSelectedLecture] = useState(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState({});
 
   // Quiz-related state
@@ -218,7 +243,7 @@ const CourseLearning = () => {
       console.error('Error fetching course data:', error);
       if (error.response?.status === 403) {
         alert('You must be enrolled in this course to access learning materials');
-        navigate('/student');
+        navigate('/student/dashboard');
       }
     } finally {
       setLoading(false);
@@ -244,6 +269,7 @@ const CourseLearning = () => {
     try {
       const response = await api.get(`/courses/${courseId}/learn/`);
       setCourseData(response.data);
+      console.log('Course data refreshed:', response.data);
 
       // Update the selected lecture with fresh data but don't change selection
       if (selectedLecture) {
@@ -251,6 +277,11 @@ const CourseLearning = () => {
           const updatedLecture = section.lectures.find(l => l.id === selectedLecture.id);
           if (updatedLecture) {
             setSelectedLecture(updatedLecture);
+            console.log('Updated selected lecture:', updatedLecture);
+            // Check if this is an assignment and log submission data
+            if (updatedLecture.content_type === 'assignment' && updatedLecture.submission) {
+              console.log('Assignment submission data:', updatedLecture.submission);
+            }
             // Ensure localStorage is updated
             localStorage.setItem(`selectedLecture_${courseId}`, updatedLecture.id);
             break;
@@ -259,6 +290,15 @@ const CourseLearning = () => {
       }
     } catch (error) {
       console.error('Error refreshing course data:', error);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await refreshCourseDataOnly();
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -279,6 +319,9 @@ const CourseLearning = () => {
         return; // Don't switch lectures
       }
     }
+
+    // Close mobile sidebar when lecture is selected
+    setIsSidebarOpen(false);
 
     // Reset quiz state when switching lectures
     if (quizMode !== null) {
@@ -449,41 +492,90 @@ const CourseLearning = () => {
         {/* Lecture Content */}
         <div className="flex-1 overflow-auto">
           {lecture.content_type === 'video' && (
-            <div className="p-6">
-              {lecture.video_url ? (
-                <div className="aspect-video bg-black rounded-lg overflow-hidden">
+            <div className="p-4 sm:p-6">
+              <div className="aspect-video bg-black rounded-lg overflow-hidden">
+                {lecture.video_type === 'youtube' && lecture.video_url ? (
+                  // YouTube Video
+                  <iframe
+                    key={lecture.id}
+                    className="w-full h-full"
+                    src={`https://www.youtube.com/embed/${getYouTubeVideoId(lecture.video_url)}?enablejsapi=1&rel=0&modestbranding=1`}
+                    title={lecture.title}
+                    frameBorder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                  />
+                ) : lecture.video_file_url ? (
+                  // Local Video (with or without subtitles)
                   <video
                     key={lecture.id} // Force re-mount when switching videos
                     controls
+                    crossOrigin="anonymous"
                     className="w-full h-full"
                     poster={lecture.thumbnail}
+                    preload="metadata"
                     onTimeUpdate={(e) => {
                       // Save progress
                       const currentTime = Math.floor(e.target.currentTime);
                       // You could save this to backend periodically
                     }}
+                    onLoadedMetadata={(e) => {
+                      // Enable text tracks after video loads
+                      const video = e.target;
+                      if (video.textTracks && video.textTracks.length > 0) {
+                        video.textTracks[0].mode = 'showing';
+                      }
+                    }}
                   >
-                    <source src={lecture.video_url} type="video/mp4" />
+                    <source src={lecture.video_file_url} type="video/mp4" />
+
+                    {/* Add subtitles if available */}
+                    {lecture.subtitles && lecture.subtitles.length > 0 && lecture.subtitles.map((subtitle, index) => (
+                      <track
+                        key={subtitle.language}
+                        kind="captions"
+                        src={subtitle.url}
+                        srcLang={subtitle.language}
+                        label={subtitle.language_name}
+                        {...(index === 0 ? { default: true } : {})}
+                      />
+                    ))}
+
                     Your browser does not support the video tag.
                   </video>
-                </div>
-              ) : (
-                <div className="aspect-video bg-gray-100 rounded-lg flex items-center justify-center">
-                  <div className="text-center">
-                    <PlayCircle className="mx-auto h-12 w-12 text-gray-400 mb-2" />
-                    <p className="text-gray-500">Video content not available</p>
+                ) : (
+                  // No video available
+                  <div className="aspect-video bg-gray-100 rounded-lg flex items-center justify-center">
+                    <div className="text-center">
+                      <PlayCircle className="mx-auto h-12 w-12 text-gray-400 mb-2" />
+                      <p className="text-gray-500">Video content not available</p>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
+
+              {/* Video Info */}
               <div className="mt-4 flex items-center justify-between text-sm text-gray-500">
-                <span>Duration: {Math.floor(lecture.duration / 60)}:{(lecture.duration % 60).toString().padStart(2, '0')}</span>
+                <div className="flex items-center space-x-4">
+                  {lecture.duration > 0 && (
+                    <span>Duration: {Math.floor(lecture.duration / 60)}:{(lecture.duration % 60).toString().padStart(2, '0')}</span>
+                  )}
+                  <span className="capitalize">
+                    {lecture.video_type === 'youtube' ? 'YouTube Video' : 'Local Video'}
+                  </span>
+                  {lecture.subtitles && lecture.subtitles.length > 0 && (
+                    <span className="text-blue-600">
+                      Subtitles: {lecture.subtitles.map(s => s.language_name).join(', ')}
+                    </span>
+                  )}
+                </div>
                 <span>Watched {lecture.watch_count} time{lecture.watch_count !== 1 ? 's' : ''}</span>
               </div>
             </div>
           )}
 
           {lecture.content_type === 'reading' && (
-            <div className="p-6">
+            <div className="p-4 sm:p-6">
               <div className="prose max-w-none">
                 <div className="mb-4 text-sm text-gray-500">
                   Estimated reading time: {lecture.estimated_reading_time} minutes
@@ -498,7 +590,7 @@ const CourseLearning = () => {
           )}
 
           {lecture.content_type === 'quiz' && (
-            <div className="p-6">
+            <div className="p-4 sm:p-6">
               {/* Quiz Overview */}
               {quizMode === null && (
                 <>
@@ -714,38 +806,204 @@ const CourseLearning = () => {
           )}
 
           {lecture.content_type === 'assignment' && (
-            <div className="p-6">
+            <div className="p-4 sm:p-6">
+              {/* Debug: Log assignment data */}
+              {console.log('Assignment lecture data:', lecture)}
+              
+              {/* Assignment Header */}
+              {lecture.title && (
+                <div className="mb-6">
+                  <h2 className="text-xl font-bold text-gray-900 mb-2">{lecture.title}</h2>
+                  {lecture.description && (
+                    <p className="text-gray-700 mb-4">{lecture.description}</p>
+                  )}
+                </div>
+              )}
+
+              {/* Assignment Instructions */}
+              {lecture.instructions && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                  <h3 className="font-medium text-blue-900 mb-2">Instructions</h3>
+                  <div className="text-blue-800 whitespace-pre-wrap">{lecture.instructions}</div>
+                </div>
+              )}
+
+              {/* Assignment Attachment */}
+              {lecture.attachment && (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-6">
+                  <h3 className="font-medium text-gray-900 mb-2">Assignment Materials</h3>
+                  {/* Debug: Log attachment info */}
+                  {console.log('Attachment URL:', lecture.attachment, 'Name:', lecture.attachment_name)}
+                  
+                  <div className="flex items-center space-x-3">
+                    <FileText className="text-red-500" size={20} />
+                    <div className="flex-1">
+                      <a 
+                        href={lecture.attachment}
+                        download={lecture.attachment_name || 'assignment-file'}
+                        className="text-indigo-600 hover:text-indigo-800 font-medium"
+                        onClick={async (e) => {
+                          e.preventDefault();
+                          try {
+                            console.log('Attempting to download:', lecture.attachment);
+                            
+                            // Try to fetch the file first to check if it exists
+                            const response = await fetch(lecture.attachment);
+                            if (!response.ok) {
+                              throw new Error(`File not found: ${response.status}`);
+                            }
+                            
+                            // Create blob and download
+                            const blob = await response.blob();
+                            const url = window.URL.createObjectURL(blob);
+                            const link = document.createElement('a');
+                            link.href = url;
+                            link.download = lecture.attachment_name || 'assignment-file';
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                            window.URL.revokeObjectURL(url);
+                          } catch (error) {
+                            console.error('Download failed:', error);
+                            alert('Failed to download file. The file might not exist or there might be a server issue.');
+                          }
+                        }}
+                      >
+                        {lecture.attachment_name || 'Download Assignment File'}
+                      </a>
+                      <p className="text-sm text-gray-500">Click to download assignment materials</p>
+                      <p className="text-xs text-gray-400">URL: {lecture.attachment}</p>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        try {
+                          console.log('Download button clicked for:', lecture.attachment);
+                          
+                          const response = await fetch(lecture.attachment);
+                          if (!response.ok) {
+                            throw new Error(`File not found: ${response.status}`);
+                          }
+                          
+                          const blob = await response.blob();
+                          const url = window.URL.createObjectURL(blob);
+                          const link = document.createElement('a');
+                          link.href = url;
+                          link.download = lecture.attachment_name || 'assignment-file';
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                          window.URL.revokeObjectURL(url);
+                        } catch (error) {
+                          console.error('Download failed:', error);
+                          alert('Failed to download file. The file might not exist or there might be a server issue.');
+                        }
+                      }}
+                      className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded transition-colors"
+                      title="Download file"
+                    >
+                      <Download size={16} />
+                    </button>
+                  </div>
+                </div>
+              )}
+              
               <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-6">
                 <h3 className="font-medium text-purple-900 mb-2">Assignment Details</h3>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
                     <span className="text-purple-700">Due Date:</span>{' '}
-                    {lecture.due_date ? new Date(lecture.due_date).toLocaleDateString() : 'No due date'}
+                    {lecture.due_date ? new Date(lecture.due_date).toLocaleString('en-US', {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    }) : 'No due date'}
                   </div>
                   <div>
-                    <span className="text-purple-700">Max Points:</span> {lecture.max_points}
+                    <span className="text-purple-700">Max Points:</span> {lecture.max_points || 'Not set'}
                   </div>
                   <div>
-                    <span className="text-purple-700">Passing Score:</span> {lecture.passing_score}%
+                    <span className="text-purple-700">Passing Score:</span> {lecture.passing_score || 'Not set'}%
                   </div>
                   <div>
                     <span className="text-purple-700">Status:</span>
-                    <span className={`ml-1 ${lecture.submission.submitted ? 'text-green-600' : 'text-orange-600'}`}>
-                      {lecture.submission.submitted ? 'Submitted' : 'Not Submitted'}
+                    <span className={`ml-1 ${lecture.submission?.submitted ? 'text-green-600' : 'text-orange-600'}`}>
+                      {lecture.submission?.submitted ? 'Submitted' : 'Not Submitted'}
                     </span>
                   </div>
                 </div>
               </div>
 
-              {lecture.submission.submitted ? (
+              {lecture.submission?.submitted ? (
                 <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                   <h4 className="font-medium text-green-900 mb-2">Your Submission</h4>
                   <p className="text-sm text-green-700">
-                    Submitted on: {new Date(lecture.submission.submission_date).toLocaleDateString()}
+                    Submitted on: {lecture.submission.submission_date ? new Date(lecture.submission.submission_date).toLocaleString('en-US', {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    }) : 'Date not available'}
                     {lecture.submission.is_late && <span className="text-red-600 ml-2">(Late)</span>}
                   </p>
+
+                  {/* Display submitted text */}
+                  {lecture.submission.submission_text && (
+                    <div className="mt-3">
+                      <p className="text-sm font-medium text-green-700 mb-1">Text Submission:</p>
+                      <div className="bg-white p-3 rounded border text-sm text-gray-700">
+                        {lecture.submission.submission_text}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Display submitted file */}
+                  {lecture.submission.has_file && lecture.submission.original_filename && (
+                    <div className="mt-3">
+                      <p className="text-sm font-medium text-green-700 mb-1">Uploaded File:</p>
+                      <div className="flex items-center justify-between bg-white p-3 rounded border">
+                        <div className="flex items-center">
+                          <FileText className="h-4 w-4 text-gray-500 mr-2" />
+                          <span className="text-sm text-gray-700">{lecture.submission.original_filename}</span>
+                        </div>
+                        {lecture.submission.has_file && lecture.submission.original_filename && (
+                          <button
+                            onClick={async () => {
+                              try {
+                                // Use the new download endpoint
+                                const response = await api.get(`/courses/assignments/submissions/${lecture.submission.id}/download/`, {
+                                  responseType: 'blob'
+                                });
+
+                                // Create blob URL and download
+                                const blob = new Blob([response.data]);
+                                const url = window.URL.createObjectURL(blob);
+                                const link = document.createElement('a');
+                                link.href = url;
+                                link.download = lecture.submission.original_filename;
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                                window.URL.revokeObjectURL(url);
+                              } catch (error) {
+                                console.error('Download error:', error);
+                                alert('Failed to download file. Please try again.');
+                              }
+                            }}
+                            className="flex items-center px-3 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200"
+                          >
+                            <Download className="h-3 w-3 mr-1" />
+                            Download
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {lecture.submission.graded && (
-                    <div className="mt-2">
+                    <div className="mt-3">
                       <p className="text-sm">
                         <span className="text-green-700">Grade:</span> {lecture.submission.grade}/{lecture.max_points}
                       </p>
@@ -798,22 +1056,45 @@ const CourseLearning = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center space-x-4">
+              {/* Mobile Menu Button */}
               <button
-                onClick={() => navigate('/student')}
+                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                className="lg:hidden p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
+              >
+                <Menu size={20} />
+              </button>
+
+              <button
+                onClick={() => navigate('/student/dashboard')}
                 className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
               >
                 <ArrowLeft size={20} />
               </button>
-              <div>
-                <h1 className="text-lg font-semibold text-gray-900">{courseData.course.title}</h1>
-                <p className="text-sm text-gray-500">by {courseData.course.instructor}</p>
+              <div className="min-w-0">
+                <h1 className="text-lg font-semibold text-gray-900 truncate">{courseData.course.title}</h1>
+                <p className="text-sm text-gray-500 hidden sm:block truncate">by {courseData.course.instructor}</p>
               </div>
             </div>
             <div className="flex items-center space-x-4">
-              <div className="text-sm text-gray-600">
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className={`p-2 rounded-lg transition-colors ${
+                  refreshing
+                    ? 'text-gray-400 cursor-not-allowed'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                }`}
+                title="Refresh course data"
+              >
+                <RefreshCw
+                  size={18}
+                  className={refreshing ? 'animate-spin' : ''}
+                />
+              </button>
+              <div className="text-sm text-gray-600 hidden md:block">
                 Progress: {courseData.progress.progress_percentage}%
               </div>
-              <div className="w-32 bg-gray-200 rounded-full h-2">
+              <div className="w-16 sm:w-24 md:w-32 bg-gray-200 rounded-full h-2">
                 <div
                   className="bg-indigo-600 h-2 rounded-full transition-all duration-300"
                   style={{ width: `${courseData.progress.progress_percentage}%` }}
@@ -824,14 +1105,40 @@ const CourseLearning = () => {
         </div>
       </header>
 
-      <div className="flex h-[calc(100vh-4rem)]">
+      <div className="flex h-[calc(100vh-4rem)] relative">
+        {/* Mobile Sidebar Overlay */}
+        {isSidebarOpen && (
+          <div
+            className="lg:hidden fixed inset-0 bg-black bg-opacity-50 z-50"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+        )}
+
         {/* Sidebar - Course Content */}
-        <div className="w-80 bg-white border-r border-gray-200 overflow-y-auto">
+        <div className={`
+          ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+          fixed lg:static inset-y-0 left-0 z-50 lg:z-auto
+          w-80 bg-white border-r border-gray-200 overflow-y-auto
+          transform transition-transform duration-300 ease-in-out
+          lg:transform-none
+          mt-16 lg:mt-0
+        `}>
           <div className="p-4 border-b border-gray-200">
-            <h2 className="font-semibold text-gray-900">Course Content</h2>
-            <p className="text-sm text-gray-500 mt-1">
-              {courseData.progress.completed_lectures} of {courseData.progress.total_lectures} lectures completed
-            </p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-semibold text-gray-900">Course Content</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  {courseData.progress.completed_lectures} of {courseData.progress.total_lectures} lectures completed
+                </p>
+              </div>
+              {/* Mobile Close Button */}
+              <button
+                onClick={() => setIsSidebarOpen(false)}
+                className="lg:hidden p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                <X size={20} />
+              </button>
+            </div>
           </div>
 
           <div className="divide-y divide-gray-200">
@@ -882,7 +1189,7 @@ const CourseLearning = () => {
         </div>
 
         {/* Main Content Area */}
-        <div className="flex-1 bg-white">
+        <div className="flex-1 bg-white lg:ml-0 transition-all duration-300 ease-in-out">
           {renderLectureContent()}
         </div>
       </div>

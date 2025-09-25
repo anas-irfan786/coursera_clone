@@ -60,6 +60,7 @@ urlpatterns = [
     path('<uuid:course_uuid>/learn/', student_views.course_learn_view, name='course-learn'),
     path('<uuid:course_uuid>/lectures/<uuid:lecture_uuid>/complete/', student_views.mark_lecture_complete, name='mark-lecture-complete'),
     path('assignments/<uuid:assignment_uuid>/submit/', student_views.submit_assignment, name='submit-assignment'),
+    path('assignments/submissions/<uuid:submission_uuid>/download/', student_views.download_submission_file, name='download-submission-file'),
     path('<uuid:course_uuid>/bookmark/', student_views.bookmark_course, name='bookmark-course'),
 
      # Student stats and achievements
@@ -79,8 +80,18 @@ urlpatterns = [
     path('notifications/', views.get_user_notifications, name='user-notifications'),
     path('notifications/count/', views.get_unread_notification_count, name='notification-count'),
     path('notifications/<int:notification_id>/read/', views.mark_notification_read, name='mark-notification-read'),
+    path('notifications/test/', views.create_test_notification, name='create-test-notification'),
 
     # Quiz attempt endpoints
     path('quizzes/<uuid:quiz_uuid>/attempt/', student_views.attempt_quiz, name='attempt-quiz'),
+
+    # Instructor assignment management
+    path('instructor/assignments/', views.instructor_assignments, name='instructor-assignments'),
+    path('instructor/assignments/<uuid:assignment_uuid>/submissions/', views.instructor_assignment_submissions, name='instructor-assignment-submissions'),
+    path('instructor/assignments/submissions/<uuid:submission_uuid>/grade/', views.grade_assignment_submission, name='grade-assignment-submission'),
+
+    # Gradebook management
+    path('instructor/courses/<uuid:course_uuid>/gradebook/', views.instructor_course_gradebook, name='instructor-course-gradebook'),
+    path('student/gradebook/', views.student_gradebook, name='student-gradebook'),
 
 ]

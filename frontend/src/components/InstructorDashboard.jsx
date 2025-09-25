@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Menu, X, ChevronDown, Settings, LogOut, Home, BarChart2, CreditCard, MessageSquare, BookOpen, Users, Search } from 'lucide-react';
+import { Menu, X, ChevronDown, Settings, LogOut, Home, BarChart2, CreditCard, MessageSquare, BookOpen, Users, Search, FileText } from 'lucide-react';
 import authService from '../services/authService';
 
 // Import extracted components
@@ -11,6 +11,7 @@ import EarningsView from './instructor/EarningsView';
 import NotificationDropdown from './shared/NotificationDropdown';
 import MessagesView from './instructor/MessagesView';
 import SettingsView from './instructor/SettingsView';
+import AssignmentsView from './instructor/AssignmentsView';
 
 const InstructorDashboard = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -79,6 +80,7 @@ const InstructorDashboard = () => {
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: Home },
     { id: 'courses', label: 'My Courses', icon: BookOpen },
+    { id: 'assignments', label: 'Assignments', icon: FileText },
     { id: 'students', label: 'Students', icon: Users },
     { id: 'analytics', label: 'Analytics', icon: BarChart2 },
     { id: 'earnings', label: 'Earnings', icon: CreditCard },
@@ -92,6 +94,8 @@ const InstructorDashboard = () => {
         return <DashboardOverview />;
       case 'courses':
         return <CoursesManagement />;
+      case 'assignments':
+        return <AssignmentsView />;
       case 'students':
         return <StudentsView />;
       case 'analytics':

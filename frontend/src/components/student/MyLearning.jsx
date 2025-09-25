@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { PlayCircle, Clock, BookOpen, Award, Search, Filter } from 'lucide-react';
+import { PlayCircle, Clock, BookOpen, Award, Search} from 'lucide-react';
 import api from '../../services/api';
 
 const MyLearning = () => {

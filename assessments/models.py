@@ -16,11 +16,12 @@ def assignment_upload_path(instance, filename):
     # Get file extension
     ext = filename.split('.')[-1].lower()
 
-    # Generate unique filename
-    unique_filename = f"{uuid.uuid4()}.{ext}"
+    # Generate shorter unique filename using first 8 characters of UUID
+    unique_filename = f"{uuid.uuid4().hex[:8]}.{ext}"
 
-    # Create path: assignment_uploads/course_id/assignment_id/student_id/filename
-    return f"assignment_uploads/{instance.assignment.course.uuid}/{instance.assignment.uuid}/{instance.student.uuid}/{unique_filename}"
+    # Create shorter path: assignment_uploads/assignment_id_short/filename
+    assignment_short_id = str(instance.assignment.uuid).replace('-', '')[:12]
+    return f"assignment_uploads/{assignment_short_id}/{unique_filename}"
 
 class Quiz(BaseModel):
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='quizzes')
@@ -183,7 +184,7 @@ class AssignmentSubmission(BaseModel):
     enrollment = models.ForeignKey(Enrollment, on_delete=models.CASCADE)
     
     submission_text = models.TextField(blank=True)
-    submission_file = models.FileField(upload_to=assignment_upload_path, blank=True, null=True)
+    submission_file = models.FileField(upload_to=assignment_upload_path, blank=True, null=True, max_length=200)
     original_filename = models.CharField(max_length=255, blank=True)  # Store original filename
     
     submitted_at = models.DateTimeField(auto_now_add=True)
@@ -218,19 +219,38 @@ class AssignmentSubmission(BaseModel):
         if self.submission_file and self.submission_file.size > 50 * 1024 * 1024:
             raise ValidationError("File size cannot exceed 50MB")
 
-        # Validate file extension for security
+        # Enhanced file security validation
         if self.submission_file:
-            allowed_extensions = ['.pdf', '.doc', '.docx', '.txt', '.rtf', '.jpg', '.jpeg', '.png', '.gif', '.zip', '.rar', '.7z', '.pptx', '.xlsx']
+            import re
+
+            # Whitelist approach for file extensions
+            allowed_extensions = ['.pdf', '.doc', '.docx', '.txt', '.rtf', '.jpg', '.jpeg', '.png', '.gif', '.pptx', '.xlsx']
             file_extension = os.path.splitext(self.submission_file.name)[1].lower()
             if file_extension not in allowed_extensions:
                 raise ValidationError(f"File type {file_extension} not allowed. Allowed types: {', '.join(allowed_extensions)}")
 
-            # Additional security: Check for dangerous filenames
-            dangerous_patterns = ['..', '/', '\\', '<script', '<?php', '.exe', '.bat', '.cmd', '.sh']
-            filename = self.submission_file.name.lower()
+            # Sanitize filename - allow only alphanumeric, dots, hyphens, underscores
+            filename = os.path.basename(self.submission_file.name)
+            if not re.match(r'^[a-zA-Z0-9._-]+$', filename):
+                raise ValidationError("Filename contains invalid characters. Only letters, numbers, dots, hyphens and underscores are allowed.")
+
+            # Additional security: Check for dangerous patterns
+            dangerous_patterns = [
+                '..', '/', '\\', '<script', '<?php', '<?xml',
+                '.exe', '.bat', '.cmd', '.sh', '.dll', '.scr',
+                '.vbs', '.js', '.jar', '.class', '.php', '.asp'
+            ]
+            filename_lower = filename.lower()
             for pattern in dangerous_patterns:
-                if pattern in filename:
-                    raise ValidationError("Filename contains unsafe characters or patterns")
+                if pattern in filename_lower:
+                    raise ValidationError("Filename contains unsafe patterns.")
+
+            # Check for double extensions (e.g., file.txt.exe)
+            if filename_lower.count('.') > 1:
+                all_extensions = re.findall(r'\.[a-zA-Z0-9]+', filename_lower)
+                for ext in all_extensions[:-1]:  # Check all extensions except the last one
+                    if ext in ['.exe', '.bat', '.cmd', '.sh', '.scr', '.com', '.pif']:
+                        raise ValidationError("File has suspicious double extension.")
 
         # Check if assignment is still accepting submissions
         if self.assignment.due_date and timezone.now() > self.assignment.due_date:

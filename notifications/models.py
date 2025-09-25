@@ -17,6 +17,7 @@ class Notification(BaseModel):
         ('enrollment', 'New Enrollment'),
         ('course_update', 'Course Update'),
         ('assignment_due', 'Assignment Due'),
+        ('assignment_graded', 'Assignment Graded'),
         ('quiz_available', 'Quiz Available'),
         ('certificate_earned', 'Certificate Earned'),
 

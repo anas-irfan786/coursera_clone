@@ -53,12 +53,16 @@ def all_courses(request):
         courses = courses.filter(course_type=course_type)
     
     if search:
-        courses = courses.filter(
-            Q(title__icontains=search) |
-            Q(description__icontains=search) |
-            Q(instructor__first_name__icontains=search) |
-            Q(instructor__last_name__icontains=search)
-        )
+        # Sanitize search input for security
+        from core.security import sanitize_search_query
+        search = sanitize_search_query(search)
+        if search:  # Only search if we have valid input after sanitization
+            courses = courses.filter(
+                Q(title__icontains=search) |
+                Q(description__icontains=search) |
+                Q(instructor__first_name__icontains=search) |
+                Q(instructor__last_name__icontains=search)
+            )
     
     # Apply sorting
     if sort_by == 'popular':
@@ -202,16 +206,33 @@ def course_learn_view(request, course_uuid):
                 try:
                     from content.models import VideoContent
                     video_content = VideoContent.objects.get(lecture=lecture)
+
+                    # Get subtitles
+                    subtitles = []
+                    for subtitle in video_content.subtitles.all():
+                        subtitles.append({
+                            'language': subtitle.language,
+                            'language_name': subtitle.get_language_display(),
+                            'url': subtitle.file.url if subtitle.file else None,
+                            'is_auto_generated': subtitle.is_auto_generated
+                        })
+
                     lecture_data.update({
-                        'video_url': video_content.video_file.url if video_content.video_file else None,
+                        'video_type': 'youtube' if video_content.video_url else 'local',
+                        'video_file_url': video_content.video_file.url if video_content.video_file else None,
+                        'video_url': video_content.video_url if video_content.video_url else None,
                         'duration': video_content.duration,
                         'thumbnail': None,  # VideoContent doesn't have thumbnail field yet
+                        'subtitles': subtitles,
                     })
                 except VideoContent.DoesNotExist:
                     lecture_data.update({
+                        'video_type': 'local',
+                        'video_file_url': None,
                         'video_url': None,
                         'duration': 0,
                         'thumbnail': None,
+                        'subtitles': [],
                     })
 
             elif lecture.content_type == 'reading':
@@ -273,7 +294,8 @@ def course_learn_view(request, course_uuid):
 
             elif lecture.content_type == 'assignment':
                 try:
-                    assignment = lecture.assignment
+                    from assessments.models import Assignment, AssignmentSubmission
+                    assignment = Assignment.objects.get(lecture=lecture)
                     # Get student's submission
                     try:
                         submission = AssignmentSubmission.objects.get(
@@ -281,13 +303,23 @@ def course_learn_view(request, course_uuid):
                             student=student
                         )
                         submission_data = {
+                            'id': str(submission.uuid),
                             'submitted': True,
                             'submission_date': submission.submitted_at.isoformat(),
                             'is_late': submission.is_late,
                             'grade': float(submission.grade) if submission.grade else None,
                             'feedback': submission.feedback,
                             'graded': submission.grade is not None,
+                            'submission_text': submission.submission_text,
+                            'has_file': bool(submission.submission_file),
+                            'file_url': submission.submission_file.url if submission.submission_file else None,
+                            'original_filename': submission.original_filename,
                         }
+                        # Debug logging
+                        if submission.grade is not None:
+                            print(f"Assignment {assignment.title} - Student {student.username} - Grade: {submission.grade}, Graded: {submission.grade is not None}, Feedback: {submission.feedback}")
+                        else:
+                            print(f"Assignment {assignment.title} - Student {student.username} - No grade yet")
                     except AssignmentSubmission.DoesNotExist:
                         submission_data = {
                             'submitted': False,
@@ -300,19 +332,30 @@ def course_learn_view(request, course_uuid):
 
                     lecture_data.update({
                         'assignment_id': str(assignment.uuid),
+                        'title': assignment.title,
+                        'description': assignment.description,
+                        'instructions': assignment.instructions,
                         'due_date': assignment.due_date.isoformat() if assignment.due_date else None,
                         'max_points': assignment.max_points,
                         'passing_score': assignment.passing_score,
                         'allow_late_submission': assignment.allow_late_submission,
+                        'attachment': assignment.attachment.url if assignment.attachment else None,
+                        'attachment_name': assignment.attachment.name.split('/')[-1] if assignment.attachment else None,
                         'submission': submission_data,
                     })
-                except Exception as e:
+                except (Assignment.DoesNotExist, Exception) as e:
+                    print(f"Error getting assignment for lecture {lecture.id}: {str(e)}")
                     lecture_data.update({
                         'assignment_id': None,
+                        'title': '',
+                        'description': '',
+                        'instructions': '',
                         'due_date': None,
                         'max_points': 0,
                         'passing_score': 0,
                         'allow_late_submission': False,
+                        'attachment': None,
+                        'attachment_name': None,
                         'submission': {
                             'submitted': False,
                             'submission_date': None,
@@ -458,17 +501,31 @@ def submit_assignment(request, assignment_uuid):
         )
 
     # Check if submission is late
-    is_late = assignment.due_date and timezone.now() > assignment.due_date
+    if assignment.due_date:
+        is_late = timezone.now() > assignment.due_date
+        print(f"Assignment has due date: {assignment.due_date}, Current time: {timezone.now()}, Is late: {is_late}")
+    else:
+        is_late = False  # No due date means it can't be late
+        print(f"Assignment has no due date, setting is_late to False")
 
     # Create submission
-    submission = AssignmentSubmission.objects.create(
-        assignment=assignment,
-        student=student,
-        enrollment=enrollment,
-        submission_text=submission_text,
-        submission_file=submission_file,
-        is_late=is_late
-    )
+    try:
+        submission = AssignmentSubmission.objects.create(
+            assignment=assignment,
+            student=student,
+            enrollment=enrollment,
+            submission_text=submission_text,
+            submission_file=submission_file,
+            original_filename=submission_file.name if submission_file else '',
+            is_late=is_late
+        )
+            
+    except Exception as e:
+        print(f"Error creating submission: {str(e)}")
+        return Response(
+            {'error': f'Failed to create submission: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
     # Auto-mark lecture as complete when assignment is submitted
     try:
@@ -503,6 +560,61 @@ def submit_assignment(request, assignment_uuid):
             'has_text': bool(submission.submission_text.strip()),
         }
     })
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def download_submission_file(request, submission_uuid):
+    """Download assignment submission file"""
+    from django.http import HttpResponse, Http404
+    from django.core.files.storage import default_storage
+    import mimetypes
+    import os
+    from assessments.models import AssignmentSubmission
+
+    try:
+        submission = AssignmentSubmission.objects.get(uuid=submission_uuid)
+
+        # Check permissions: students can download their own submissions,
+        # instructors can download submissions from their courses
+        if request.user.user_type == 'student':
+            if submission.student != request.user:
+                raise Http404("Submission not found")
+        elif request.user.user_type == 'instructor':
+            if submission.assignment.course.instructor != request.user:
+                raise Http404("Submission not found")
+        else:
+            raise Http404("Submission not found")
+
+    except AssignmentSubmission.DoesNotExist:
+        raise Http404("Submission not found")
+
+    if not submission.submission_file:
+        raise Http404("No file attached to this submission")
+
+    # Get the file path
+    file_path = submission.submission_file.name
+    
+    # Check if file exists
+    if not default_storage.exists(file_path):
+        raise Http404("File not found on server")
+
+    # Get file content
+    try:
+        file_content = default_storage.open(file_path).read()
+    except Exception as e:
+        raise Http404("Error reading file")
+
+    # Determine content type
+    content_type, _ = mimetypes.guess_type(submission.original_filename)
+    if not content_type:
+        content_type = 'application/octet-stream'
+
+    # Create response
+    response = HttpResponse(file_content, content_type=content_type)
+    response['Content-Disposition'] = f'attachment; filename="{submission.original_filename}"'
+    response['Content-Length'] = len(file_content)
+    
+    return response
 
 @api_view(['GET'])
 @permission_classes([IsStudent])
@@ -656,11 +768,15 @@ def enroll_course(request, course_uuid):
         course=course,
         enrolled_date=timezone.now()
     )
-    
+
     # Update course enrolled count
     course.total_enrolled += 1
     course.save()
-    
+
+    # Create enrollment notifications
+    from notifications.services import NotificationService
+    notification_result = NotificationService.create_enrollment_notification(enrollment)
+
     return Response({
         'message': 'Successfully enrolled in course',
         'enrollment_id': str(enrollment.uuid)

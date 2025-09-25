@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronRight, PlayCircle, Star } from 'lucide-react';
+import { ChevronRight, PlayCircle} from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import CourseCard from './CourseCard';
 import api from '../../services/api';

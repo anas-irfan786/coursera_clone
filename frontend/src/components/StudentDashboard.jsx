@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { BookOpen, Clock, Award, CheckCircle, Star, Filter, Search, Bell, User, Settings, LogOut, Home, Users, Timer, Target, Zap, ChevronRight, Heart, Share2, MoreVertical, Menu, X, Plus, MessageSquare, Trophy } from "lucide-react";
+import { BookOpen, Award, Search, Bell, User, Settings, LogOut, Home, Zap, Menu, X,  MessageSquare, Trophy, GraduationCap } from "lucide-react";
 import authService from "../services/authService";
 
 // Import extracted components
@@ -9,6 +9,9 @@ import Explore from './student/Explore';
 import AchievementsView from './student/AchievementsView';
 import CertificatesView from './student/CertificatesView';
 import StudentMessagesView from './student/StudentMessagesView';
+import NotificationDropdown from './student/NotificationDropdown';
+import NotificationsView from './student/NotificationsView';
+import GradesView from './student/GradesView';
 
 const StudentDashboard = () => {
   const [activeTab, setActiveTab] = useState(() => {
@@ -88,6 +91,8 @@ const StudentDashboard = () => {
     { id: "home", label: "Home", icon: Home },
     { id: "my-learning", label: "My Learning", icon: BookOpen },
     { id: "explore", label: "Explore", icon: Search },
+    { id: "grades", label: "Grades", icon: GraduationCap },
+    { id: "notifications", label: "Notifications", icon: Bell },
     { id: "messages", label: "Messages", icon: MessageSquare },
     { id: "achievements", label: "Achievements", icon: Trophy },
     { id: "certificates", label: "Certificates", icon: Award },
@@ -101,6 +106,10 @@ const StudentDashboard = () => {
         return <MyLearning />;
       case "explore":
         return <Explore />;
+      case "grades":
+        return <GradesView />;
+      case "notifications":
+        return <NotificationsView />;
       case "messages":
         return <StudentMessagesView />;
       case "achievements":
@@ -169,10 +178,7 @@ const StudentDashboard = () => {
               )}
 
               {/* Notifications */}
-              <button className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg relative">
-                <Bell size={20} />
-                <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-              </button>
+              <NotificationDropdown onNavigateToNotifications={() => setActiveTab('notifications')} />
 
               {/* User Menu */}
               <div className="relative group">
